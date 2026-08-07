@@ -83,7 +83,16 @@ class AIEngine:
         self.timeout = timeout
         self.session = requests.Session()
         
+        # BỔ SUNG CƠ CHẾ TRẠNG THÁI (ĐÃ FIX LỖI)
+        self._is_ready = False
+        if self.api_key or self.provider_type == "Ollama":
+            self._is_ready = True
+            
         self._validate_provider()
+
+    def is_ready(self) -> bool:
+        """Kiểm tra xem Engine đã sẵn sàng nhận lệnh chưa."""
+        return self._is_ready
 
     def _validate_provider(self):
         """Kiểm tra tính hợp lệ giữa Provider và Model Name."""
@@ -147,6 +156,10 @@ class AIEngine:
         retry=retry_if_exception_type((NetworkError, TimeoutError))
     )
     def generate_text(self, prompt: str, system_instruction: str = "", stream: bool = False) -> Union[AIResponse, Generator]:
+        
+        if not self.is_ready():
+            raise AuthenticationError("Hệ thống AI chưa sẵn sàng. Vui lòng kiểm tra API Key.")
+
         cache_key = hash(f"{self.provider_type}_{self.model_name}_{system_instruction}_{prompt}")
         if not stream and cache_key in prompt_cache:
             logger.info("⚡ Trả về kết quả từ Cache.")
@@ -225,7 +238,7 @@ class AIEngine:
             if "access_token_type_unsupported" in err_msg or "oauth" in err_msg:
                 raise AuthenticationError(
                     "Khóa bảo mật hiện tại là mã OAuth tạm thời, không phải API Key tĩnh. "
-                    "Vui lòng chuyển sang dùng nguồn 'OpenRouter' (Đã tích hợp sẵn Gemini 2.5 Flash) ở menu bên trái để đảm bảo hệ thống hoạt động."
+                    "Vui lòng chuyển sang dùng nguồn 'OpenRouter' (Đã tích hợp sẵn Gemini 2.5 Flash) ở menu bên trái."
                 )
             if "api_key" in err_msg or "401" in err_msg or "403" in err_msg:
                 raise AuthenticationError(f"API Key Gemini không hợp lệ. Chi tiết: {str(e)}")
