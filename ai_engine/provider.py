@@ -19,7 +19,6 @@ from cachetools import TTLCache
 # ==========================================
 from openai import OpenAI
 import anthropic
-# CHỈ SỬ DỤNG SDK MỚI CỦA GOOGLE
 from google import genai
 from google.genai import types
 from google.genai.errors import APIError
@@ -117,7 +116,6 @@ class AIEngine:
 
     def generate_with_fallback(self, prompt: str, system_instruction: str = "") -> AIResponse:
         fallbacks = [
-            ("Gemini", "gemini-2.5-flash", self.api_key),
             ("OpenRouter", "google/gemini-2.5-flash", self.api_key), 
             ("OpenAI", "gpt-4o-mini", self.api_key),
             ("Anthropic", "claude-3-haiku-20240307", self.api_key)
@@ -195,10 +193,7 @@ class AIEngine:
     def _call_gemini_sdk(self, prompt: str, system_instruction: str) -> AIResponse:
         """Sử dụng thuần túy SDK google-genai mới"""
         try:
-            # Không dùng genai.configure, truyền key trực tiếp vào Client
             client = genai.Client(api_key=self.api_key)
-            
-            # Sử dụng đúng Config Class của SDK mới
             config = types.GenerateContentConfig(
                 temperature=DEFAULT_TEMP,
                 top_p=DEFAULT_TOP_P,
@@ -206,7 +201,6 @@ class AIEngine:
                 system_instruction=system_instruction if system_instruction else None
             )
             
-            # Gọi API sinh nội dung
             res = client.models.generate_content(
                 model=self.model_name,
                 contents=prompt,
@@ -228,8 +222,13 @@ class AIEngine:
             )
         except APIError as e:
             err_msg = str(e).lower()
+            if "access_token_type_unsupported" in err_msg or "oauth" in err_msg:
+                raise AuthenticationError(
+                    "Khóa bảo mật hiện tại là mã OAuth tạm thời, không phải API Key tĩnh. "
+                    "Vui lòng chuyển sang dùng nguồn 'OpenRouter' (Đã tích hợp sẵn Gemini 2.5 Flash) ở menu bên trái để đảm bảo hệ thống hoạt động."
+                )
             if "api_key" in err_msg or "401" in err_msg or "403" in err_msg:
-                raise AuthenticationError(f"Lỗi xác thực API Key Gemini: {str(e)}")
+                raise AuthenticationError(f"API Key Gemini không hợp lệ. Chi tiết: {str(e)}")
             raise NetworkError(f"Lỗi API Gemini: {str(e)}")
         except Exception as e:
             raise NetworkError(f"Lỗi kết nối SDK Gemini: {str(e)}")
