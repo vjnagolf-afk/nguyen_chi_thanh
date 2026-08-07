@@ -1,107 +1,138 @@
-import streamlit as st
-import os
-from ai_engine.provider import AIEngine
+import json
+import requests
+import google.generativeai as genai
 
-# Thiết lập UI toàn cục
-st.set_page_config(
-    page_title="Hệ Thống Trợ Lý Giáo Viên AI", 
-    page_icon="🎓", 
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+class AIEngine:
+    def __init__(self, provider_type="OpenRouter (Khuyên dùng)", api_key="", model_name="google/gemini-2.5-flash"):
+        self.provider_type = provider_type
+        self.api_key = api_key.strip()
+        self.model_name = model_name
+        self._is_ready = False
 
-# Tải biến môi trường an toàn
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
-except ImportError:
-    pass
+        if self.api_key or self.provider_type == "Ollama (Offline)":
+            self._is_ready = True
 
-def get_api_key(key_name):
-    if key_name in st.secrets:
-        return st.secrets[key_name]
-    return os.getenv(key_name, "")
+    def is_ready(self) -> bool:
+        return self._is_ready
 
-def initialize_session_state():
-    if "teacher_name" not in st.session_state:
-        st.session_state["teacher_name"] = "Lê Hồng Dưỡng"
-    if "school_name" not in st.session_state:
-        st.session_state["school_name"] = "Trường THCS Nguyễn Chí Thanh"
-    if "ai_engine" not in st.session_state:
-        st.session_state["ai_engine"] = None
+    def generate(self, prompt: str, system_instruction: str = "") -> str:
+        if not self._is_ready:
+            raise ValueError("Hệ thống AI chưa sẵn sàng. Vui lòng kiểm tra API Key.")
 
-def render_sidebar():
-    st.sidebar.header("⚙️ Cấu hình Hệ Thống AI")
-    
-    provider = st.sidebar.selectbox(
-        "Nguồn cung cấp AI:",
-        ["Gemini (Free - Khuyên dùng)", "OpenRouter (Free Models)", "Ollama (Offline)"]
-    )
+        if "OpenRouter" in self.provider_type:
+            return self._call_openrouter(prompt, system_instruction)
+        elif "Gemini" in self.provider_type:
+            return self._call_gemini_sdk(prompt, system_instruction)
+        elif "OpenAI" in self.provider_type:
+            return self._call_openai(prompt, system_instruction)
+        elif "Anthropic" in self.provider_type:
+            return self._call_anthropic(prompt, system_instruction)
+        elif "Ollama" in self.provider_type:
+            return self._call_ollama(prompt, system_instruction)
+        else:
+            raise ValueError(f"Provider {self.provider_type} chưa được hỗ trợ.")
 
-    api_key = ""
-    model_name = "gemini-1.5-flash"
+    def _call_openrouter(self, prompt: str, system_instruction: str) -> str:
+        url = "https://openrouter.ai/api/v1/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": "https://github.com/giangvien/edu-ai",
+            "X-Title": "Hệ thống ra đề AI"
+        }
+        messages = []
+        if system_instruction:
+            messages.append({"role": "system", "content": system_instruction})
+        messages.append({"role": "user", "content": prompt})
 
-    if "Gemini" in provider:
-        api_key = st.sidebar.text_input("Google AI Studio Key:", value=get_api_key("GEMINI_API_KEY"), type="password")
-        model_name = st.sidebar.selectbox("Phiên bản Model:", ["gemini-1.5-flash", "gemini-1.5-pro"])
-    elif "OpenRouter" in provider:
-        api_key = st.sidebar.text_input("OpenRouter API Key:", value=get_api_key("OPENROUTER_API_KEY"), type="password")
-        model_name = st.sidebar.text_input("Mã Model OpenRouter:", value="google/gemini-1.5-flash")
-    elif "Ollama" in provider:
-        model_name = st.sidebar.text_input("Tên Model Local:", value="llama3")
+        payload = {
+            "model": self.model_name,
+            "messages": messages,
+            "temperature": 0.2
+        }
+        
+        try:
+            response = requests.post(url, headers=headers, json=payload, timeout=90)
+            response.raise_for_status()
+            return response.json()["choices"][0]["message"]["content"]
+        except Exception as e:
+            raise Exception(f"Lỗi OpenRouter: {str(e)}")
 
-    if st.sidebar.button("💾 Lưu Cấu Hình AI", use_container_width=True):
-        st.session_state["ai_engine"] = AIEngine(provider_type=provider, api_key=api_key, model_name=model_name)
-        st.sidebar.success("Đã lưu cấu hình AI!")
+    def _call_gemini_sdk(self, prompt: str, system_instruction: str) -> str:
+        # Chấp nhận mọi key người dùng nhập vào, không bắt bẻ định dạng
+        try:
+            genai.configure(api_key=self.api_key)
+            generation_config = genai.types.GenerationConfig(
+                temperature=0.2, 
+                top_p=0.95, 
+                max_output_tokens=8192
+            )
+            model = genai.GenerativeModel(
+                model_name=self.model_name,
+                system_instruction=system_instruction if system_instruction else None,
+                generation_config=generation_config
+            )
+            response = model.generate_content(prompt)
+            return response.text
+        except Exception as e:
+            raise Exception(f"Lỗi hệ thống Gemini: {str(e)}")
 
-    st.sidebar.divider()
-    
-    st.sidebar.header("📁 Chức năng chính")
-    menu = st.sidebar.radio(
-        "Lựa chọn module làm việc:", 
-        ["Trang chủ (Kiểm tra AI)", "Xây dựng Đề kiểm tra", "Soạn Giáo án (KHBD)"]
-    )
-    return menu
+    def _call_openai(self, prompt: str, system_instruction: str) -> str:
+        url = "https://api.openai.com/v1/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json"
+        }
+        messages = []
+        if system_instruction:
+            messages.append({"role": "system", "content": system_instruction})
+        messages.append({"role": "user", "content": prompt})
 
-def render_home():
-    st.title("🎓 Nền Tảng Trợ Lý Trí Tuệ Nhân Tạo Cho Giáo Viên")
-    st.markdown("Chào mừng thầy/cô đến với hệ thống tự động hóa xây dựng tài liệu giảng dạy chuẩn CT GDPT 2018.")
-    
-    st.subheader("🧪 Kiểm tra luồng dữ liệu AI")
-    test_prompt = st.text_area("Nhập câu lệnh để kiểm tra phản hồi từ AI:", "Hãy viết một đoạn giới thiệu ngắn về ý nghĩa của việc ứng dụng AI trong giảng dạy.")
-    
-    if st.button("Gửi kiểm tra hệ thống", type="primary"):
-        engine = st.session_state.get("ai_engine")
-        if not engine or not engine.is_ready():
-            st.error("⚠️ Vui lòng cấu hình và lưu API Key ở thanh bên trái trước khi sử dụng.")
-            return
+        payload = {
+            "model": self.model_name,
+            "messages": messages,
+            "temperature": 0.2
+        }
+        try:
+            response = requests.post(url, headers=headers, json=payload, timeout=90)
+            response.raise_for_status()
+            return response.json()["choices"][0]["message"]["content"]
+        except Exception as e:
+            raise Exception(f"Lỗi OpenAI: {str(e)}")
+
+    def _call_anthropic(self, prompt: str, system_instruction: str) -> str:
+        url = "https://api.anthropic.com/v1/messages"
+        headers = {
+            "x-api-key": self.api_key,
+            "anthropic-version": "2023-06-01",
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "model": self.model_name,
+            "max_tokens": 8192,
+            "temperature": 0.2,
+            "messages": [{"role": "user", "content": prompt}]
+        }
+        if system_instruction:
+            payload["system"] = system_instruction
             
-        with st.spinner("Đang kết nối tới máy chủ AI..."):
-            try:
-                response = engine.generate(test_prompt)
-                st.success("✅ Kết nối ổn định! Phản hồi từ hệ thống:")
-                st.write(response)
-            except Exception as e:
-                st.error(f"❌ Lỗi xử lý: {str(e)}")
-
-def main():
-    initialize_session_state()
-    menu = render_sidebar()
-    
-    if menu == "Trang chủ (Kiểm tra AI)":
-        render_home()
-    elif menu == "Xây dựng Đề kiểm tra":
         try:
-            from modules import xd_de_kt
-            xd_de_kt.render_ui()
-        except ImportError:
-            st.warning("Module 'Xây dựng Đề kiểm tra' đang được cập nhật.")
-    elif menu == "Soạn Giáo án (KHBD)":
-        try:
-            from modules import xd_khbd
-            xd_khbd.render_ui()
-        except ImportError:
-            st.warning("Module 'Soạn Giáo án' đang được cập nhật.")
+            response = requests.post(url, headers=headers, json=payload, timeout=90)
+            response.raise_for_status()
+            return response.json()["content"][0]["text"]
+        except Exception as e:
+            raise Exception(f"Lỗi Anthropic/Claude: {str(e)}")
 
-if __name__ == "__main__":
-    main()
+    def _call_ollama(self, prompt: str, system_instruction: str) -> str:
+        url = "http://localhost:11434/api/generate"
+        payload = {
+            "model": self.model_name,
+            "prompt": f"{system_instruction}\n\n{prompt}",
+            "stream": False
+        }
+        try:
+            response = requests.post(url, json=payload, timeout=120)
+            response.raise_for_status()
+            return response.json()["response"]
+        except Exception as e:
+            raise Exception(f"Lỗi Ollama (Local): {str(e)}")
