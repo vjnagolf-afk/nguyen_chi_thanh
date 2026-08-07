@@ -1,5 +1,6 @@
 import json
 import requests
+import google.generativeai as genai # Bổ sung thư viện Google
 
 class AIEngine:
     def __init__(self, provider_type="Gemini (Free)", api_key="", model_name="gemini-1.5-flash"):
@@ -8,7 +9,6 @@ class AIEngine:
         self.model_name = model_name
 
     def generate(self, prompt: str, system_instruction: str = "") -> str:
-        """Hàm gửi yêu cầu tới Provider được chọn và trả về văn bản"""
         if not self.api_key and self.provider_type != "Ollama (Offline)":
             raise ValueError("Chưa cấu hình API Key! Vui lòng nhập Key ở mục Cấu hình AI.")
 
@@ -22,25 +22,21 @@ class AIEngine:
             raise ValueError(f"Provider {self.provider_type} chưa được hỗ trợ.")
 
     def _call_gemini(self, prompt, system_instruction):
-        # Gọi Gemini REST API trực tiếp để tránh phụ thuộc thư viện nặng
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model_name}:generateContent?key={self.api_key}"
-        headers = {"Content-Type": "application/json"}
+        # Cấu hình API Key
+        genai.configure(api_key=self.api_key)
         
-        payload = {
-            "contents": [{"parts": [{"text": prompt}]}]
-        }
-        if system_instruction:
-            payload["systemInstruction"] = {"parts": [{"text": system_instruction}]}
-
-        response = requests.post(url, headers=headers, json=payload)
-        if response.status_code == 200:
-            res_data = response.json()
-            try:
-                return res_data["candidates"][0]["content"]["parts"][0]["text"]
-            except (KeyError, IndexError):
-                return "Lỗi: Không phản hồi đúng cấu trúc từ Gemini."
-        else:
-            raise Exception(f"Lỗi Gemini API ({response.status_code}): {response.text}")
+        # Khởi tạo mô hình, tích hợp luôn System Instruction nếu có
+        model = genai.GenerativeModel(
+            model_name=self.model_name,
+            system_instruction=system_instruction if system_instruction else None
+        )
+        
+        # Gọi AI sinh nội dung
+        try:
+            response = model.generate_content(prompt)
+            return response.text
+        except Exception as e:
+            raise Exception(f"Lỗi SDK Gemini: {str(e)}")
 
     def _call_openrouter(self, prompt, system_instruction):
         url = "https://openrouter.ai/api/v1/chat/completions"
