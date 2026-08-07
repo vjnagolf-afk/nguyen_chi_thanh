@@ -1,5 +1,7 @@
 import json
 import requests
+import google.generativeai as genai
+from google.api_core.exceptions import InvalidArgument, PermissionDenied
 
 class AIEngine:
     def __init__(self, provider_type="Gemini (Free)", api_key="", model_name="gemini-1.5-flash"):
@@ -19,7 +21,7 @@ class AIEngine:
             raise ValueError("Hệ thống AI chưa sẵn sàng. Vui lòng kiểm tra API Key.")
 
         if "Gemini" in self.provider_type:
-            return self._call_gemini_raw(prompt, system_instruction)
+            return self._call_gemini_sdk(prompt, system_instruction)
         elif "OpenRouter" in self.provider_type:
             return self._call_openrouter(prompt, system_instruction)
         elif "Ollama" in self.provider_type:
@@ -27,38 +29,32 @@ class AIEngine:
         else:
             raise ValueError(f"Provider {self.provider_type} chưa được hỗ trợ.")
 
-    def _call_gemini_raw(self, prompt: str, system_instruction: str) -> str:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model_name}:generateContent"
-        
-        # GIẢI PHÁP TỐI ƯU: Sử dụng Header chuẩn của Google cho mọi định dạng khóa (AIza, AQ, v.v.)
-        headers = {
-            "Content-Type": "application/json",
-            "x-goog-api-key": self.api_key
-        }
-
-        payload = {
-            "contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {
-                "temperature": 0.2, # Giữ nhiệt độ thấp để ra đề chính xác
-                "top_p": 0.95,
-                "maxOutputTokens": 8192
-            }
-        }
-        
-        if system_instruction:
-            payload["systemInstruction"] = {"parts": [{"text": system_instruction}]}
-
+    def _call_gemini_sdk(self, prompt: str, system_instruction: str) -> str:
+        """Sử dụng SDK chính thức của Google để đảm bảo kết nối ổn định nhất"""
         try:
-            response = requests.post(url, headers=headers, json=payload, timeout=90)
+            genai.configure(api_key=self.api_key)
             
-            if response.status_code != 200:
-                err_msg = response.json().get("error", {}).get("message", response.text)
-                raise Exception(f"Lỗi Gemini ({response.status_code}): {err_msg}")
-                
-            res_data = response.json()
-            return res_data["candidates"][0]["content"]["parts"][0]["text"]
+            generation_config = genai.types.GenerationConfig(
+                temperature=0.2, # Nhiệt độ thấp để bám sát đề cương
+                top_p=0.95,
+                max_output_tokens=8192,
+            )
+            
+            model = genai.GenerativeModel(
+                model_name=self.model_name,
+                system_instruction=system_instruction if system_instruction else None,
+                generation_config=generation_config
+            )
+            
+            response = model.generate_content(prompt)
+            return response.text
+            
+        except InvalidArgument as e:
+            raise Exception("API Key của Google không hợp lệ hoặc sai định dạng. Vui lòng tạo Key mới trên Google AI Studio.")
+        except PermissionDenied as e:
+            raise Exception("API Key không có quyền truy cập dịch vụ Gemini. Vui lòng kiểm tra lại.")
         except Exception as e:
-            raise Exception(f"Lỗi kết nối Gemini: {str(e)}")
+            raise Exception(f"Lỗi hệ thống Gemini: {str(e)}")
 
     def _call_openrouter(self, prompt: str, system_instruction: str) -> str:
         url = "https://openrouter.ai/api/v1/chat/completions"
