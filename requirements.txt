@@ -3,3 +3,4 @@ python-docx
 pandas
 python-dotenv
 requests
+google-generativeai
