@@ -28,21 +28,18 @@ class AIEngine:
             raise ValueError(f"Provider {self.provider_type} chưa được hỗ trợ.")
 
     def _call_gemini_raw(self, prompt: str, system_instruction: str) -> str:
-        # Chuyển sang dùng REST API thô để kiểm soát Header
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{self.model_name}:generateContent"
-        headers = {"Content-Type": "application/json"}
-
-        # Cơ chế xác thực thông minh (Smart Auth Routing)
-        if self.api_key.startswith("AIza"):
-            url += f"?key={self.api_key}"
-        else:
-            # Xử lý các token dạng OAuth (như AQ.Ab...)
-            headers["Authorization"] = f"Bearer {self.api_key}"
+        
+        # GIẢI PHÁP TỐI ƯU: Sử dụng Header chuẩn của Google cho mọi định dạng khóa (AIza, AQ, v.v.)
+        headers = {
+            "Content-Type": "application/json",
+            "x-goog-api-key": self.api_key
+        }
 
         payload = {
             "contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {
-                "temperature": 0.2, # Hạ nhiệt độ xuống 0.2 để AI bám sát dữ liệu thực tế, bớt "sáng tạo" đi
+                "temperature": 0.2, # Giữ nhiệt độ thấp để ra đề chính xác
                 "top_p": 0.95,
                 "maxOutputTokens": 8192
             }
@@ -67,7 +64,9 @@ class AIEngine:
         url = "https://openrouter.ai/api/v1/chat/completions"
         headers = {
             "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
+            "HTTP-Referer": "https://github.com/giangvien/edu-ai",
+            "X-Title": "Edu AI Assistant"
         }
         messages = []
         if system_instruction:
@@ -77,7 +76,7 @@ class AIEngine:
         payload = {
             "model": self.model_name,
             "messages": messages,
-            "temperature": 0.2 # Tối ưu hóa tính chính xác
+            "temperature": 0.2
         }
         
         try:
