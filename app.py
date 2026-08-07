@@ -1,65 +1,45 @@
 import streamlit as st
-import pandas as pd
-from docx import Document
-import io
+from ai_engine.provider import AIEngine
 
-# Cấu hình trang
-st.set_page_config(page_title="Streamlit Test App", layout="centered")
+st.set_page_config(page_title="Hệ Thống Trợ Lý Giáo Viên AI", layout="wide")
 
-# Tiêu đề ứng dụng
-st.title("🚀 Chạy Thử Nghiệm Dự Án Streamlit")
-st.write("Ứng dụng này kiểm tra xem các thư viện trong `requirements.txt` đã hoạt động tốt chưa.")
+st.title("🎓 Trợ Lý AI: Sinh Đề Kiểm Tra & Soạn Giáo Án")
 
-st.divider()
-
-# --- Kiểm tra pandas ---
-st.header("1. Kiểm tra Pandas")
-st.write("Hiển thị một bảng dữ liệu (DataFrame) đơn giản:")
-
-# Tạo dữ liệu mẫu
-data = {
-    "Tên sản phẩm": ["Sản phẩm A", "Sản phẩm B", "Sản phẩm C"],
-    "Số lượng": [15, 30, 45],
-    "Giá bán (VNĐ)": [100000, 250000, 150000]
-}
-df = pd.DataFrame(data)
-st.dataframe(df, use_container_width=True)
-
-st.divider()
-
-# --- Kiểm tra python-docx ---
-st.header("2. Kiểm tra Python-Docx")
-st.write("Tạo và tải xuống một file Word cơ bản.")
-
-def create_sample_word():
-    # Khởi tạo document
-    doc = Document()
-    doc.add_heading('Tài Liệu Mẫu (Test Document)', 0)
-    doc.add_paragraph('Đây là một tệp Word được tạo tự động thông qua thư viện python-docx trên Streamlit.')
-    
-    # Thêm một bảng vào Word dựa trên dữ liệu Pandas ở trên
-    table = doc.add_table(rows=1, cols=3)
-    hdr_cells = table.rows[0].cells
-    hdr_cells[0].text = 'Tên sản phẩm'
-    hdr_cells[1].text = 'Số lượng'
-    hdr_cells[2].text = 'Giá bán (VNĐ)'
-    
-    for i in range(len(df)):
-        row_cells = table.add_row().cells
-        row_cells[0].text = str(df.loc[i, "Tên sản phẩm"])
-        row_cells[1].text = str(df.loc[i, "Số lượng"])
-        row_cells[2].text = str(df.loc[i, "Giá bán (VNĐ)"])
-        
-    # Lưu file vào bộ đệm (BytesIO) để tải xuống
-    bio = io.BytesIO()
-    doc.save(bio)
-    return bio.getvalue()
-
-# Nút tạo và tải file Word
-word_file = create_sample_word()
-st.download_button(
-    label="📄 Tải xuống file Word mẫu",
-    data=word_file,
-    file_name="tai_lieu_thu_nghiem.docx",
-    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+# --- SIDEBAR: CẤU HÌNH AI ---
+st.sidebar.header("⚙️ Cấu hình AI Engine")
+provider = st.sidebar.selectbox(
+    "Chọn nguồn AI:",
+    ["Gemini (Free - Khuyên dùng)", "OpenRouter (Free Models)", "Ollama (Offline)"]
 )
+
+api_key = ""
+model_name = "gemini-1.5-flash"
+
+if "Gemini" in provider:
+    api_key = st.sidebar.text_input("Nhập Google AI Studio Key:", type="password", help="Lấy key miễn phí tại aistudio.google.com")
+    model_name = st.sidebar.selectbox("Chọn Model:", ["gemini-1.5-flash", "gemini-1.5-pro"])
+elif "OpenRouter" in provider:
+    api_key = st.sidebar.text_input("Nhập OpenRouter API Key:", type="password")
+    model_name = st.sidebar.text_input("Tên Model OpenRouter:", value="google/gemini-flash-1.5")
+elif "Ollama" in provider:
+    model_name = st.sidebar.text_input("Tên Model Local:", value="llama3")
+
+# Lưu vào session
+st.session_state["ai_engine"] = AIEngine(provider_type=provider, api_key=api_key, model_name=model_name)
+
+# --- TRANG CHÍNH: TEST KẾT NỐI ---
+st.subheader("🧪 Kiểm tra kết nối AI")
+test_prompt = st.text_area("Thử nhập câu hỏi cho AI:", "Hãy viết 1 câu chào thân thiện gửi đến các thầy cô giáo bằng tiếng Việt.")
+
+if st.button("Gửi thử nghiệm", type="primary"):
+    if not api_key and "Ollama" not in provider:
+        st.warning("⚠️ Vui lòng nhập API Key ở thanh bên trái trước!")
+    else:
+        with st.spinner("Đang kết nối tới AI..."):
+            try:
+                engine = st.session_state["ai_engine"]
+                response = engine.generate(test_prompt)
+                st.success("Kết nối thành công! Phản hồi từ AI:")
+                st.write(response)
+            except Exception as e:
+                st.error(f"Lỗi kết nối: {str(e)}")
