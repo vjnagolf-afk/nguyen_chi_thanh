@@ -54,7 +54,4 @@ def show_home():
                 st.error(f"❌ Thiếu `/{directory}/` - Vui lòng tạo thư mục này.")
 
 if __name__ == '__main__':
-    # Đảm bảo tạo thư mục tự động nếu chạy cục bộ
-    for folder in ["docs", "modules", "utils", "templates", "exports", "data"]:
-        os.makedirs(folder, exist_ok=True)
     main()
