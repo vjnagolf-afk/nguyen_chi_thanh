@@ -14,11 +14,15 @@ from loguru import logger
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 from cachetools import TTLCache
 
-# Các SDK Chính thức (Yêu cầu cài đặt đúng trong requirements.txt)
+# ==========================================
+# CÁC SDK CHÍNH THỨC (ĐÃ THANH LỌC)
+# ==========================================
 from openai import OpenAI
 import anthropic
+# CHỈ SỬ DỤNG SDK MỚI CỦA GOOGLE
 from google import genai
 from google.genai import types
+from google.genai.errors import APIError
 
 # ==========================================
 # HẰNG SỐ CẤU HÌNH (CONSTANTS)
@@ -59,13 +63,12 @@ class AIResponse:
 # ==========================================
 # CACHE TOÀN CỤC (GLOBAL CACHE)
 # ==========================================
-# Lưu trữ các phản hồi trong 1 giờ để giảm chi phí API
 prompt_cache = TTLCache(maxsize=200, ttl=3600)
 
 class AIEngine:
     """
     Trình điều khiển Trung tâm kết nối đa mô hình AI.
-    Hỗ trợ: Gemini (qua SDK google-genai), OpenAI, Claude, OpenRouter, Ollama.
+    Hỗ trợ: Gemini (SDK mới), OpenAI, Claude, OpenRouter, Ollama.
     """
 
     def __init__(
@@ -75,24 +78,12 @@ class AIEngine:
         model_name: str,
         timeout: int = DEFAULT_TIMEOUT,
     ):
-        """
-        Khởi tạo AI Engine.
-
-        Args:
-            provider_type (str): Nhà cung cấp (VD: 'Gemini', 'OpenAI', 'Claude', 'OpenRouter', 'Ollama').
-            api_key (str): Khóa API xác thực.
-            model_name (str): Tên mô hình (VD: 'gpt-4o', 'gemini-2.5-flash').
-            timeout (int, optional): Thời gian chờ tối đa. Mặc định 120s.
-        """
-        self.provider_type = provider_type.split()[0] # Lấy từ khóa chính, VD "Gemini (Direct)" -> "Gemini"
+        self.provider_type = provider_type.split()[0]
         self.api_key = api_key.strip()
         self.model_name = model_name.strip()
         self.timeout = timeout
-        
-        # Tái sử dụng HTTP Connection cho REST API (OpenRouter/Ollama)
         self.session = requests.Session()
         
-        # Validate Provider & Model
         self._validate_provider()
 
     def _validate_provider(self):
@@ -106,7 +97,6 @@ class AIEngine:
             raise ModelNotFoundError(f"Model '{self.model_name}' không hợp lệ cho Claude. Cần chứa 'claude'.")
 
     def _build_messages(self, system_instruction: str, prompt: str) -> List[Dict[str, str]]:
-        """Xây dựng cấu trúc tin nhắn chuẩn cho định dạng chat completion."""
         messages = []
         if system_instruction:
             messages.append({"role": "system", "content": system_instruction})
@@ -114,7 +104,6 @@ class AIEngine:
         return messages
 
     def test_connection(self) -> bool:
-        """Kiểm tra API Key, Model và Quota bằng một prompt cực nhỏ."""
         logger.info(f"Đang kiểm tra kết nối tới {self.provider_type} - Model: {self.model_name}")
         try:
             res = self.generate_text(prompt="Ping.", system_instruction="Chỉ trả lời 'Pong'.")
@@ -127,10 +116,6 @@ class AIEngine:
         return False
 
     def generate_with_fallback(self, prompt: str, system_instruction: str = "") -> AIResponse:
-        """
-        Cố gắng gọi AI chính, nếu lỗi sẽ tự động chuyển đổi mô hình/nhà cung cấp.
-        Luồng: Gemini -> OpenRouter -> OpenAI -> Anthropic.
-        """
         fallbacks = [
             ("Gemini", "gemini-2.5-flash", self.api_key),
             ("OpenRouter", "google/gemini-2.5-flash", self.api_key), 
@@ -151,12 +136,10 @@ class AIEngine:
         raise AIEngineError("Tất cả các tuyến Fallback đều thất bại.")
 
     def generate_json(self, prompt: str, system_instruction: str = "") -> AIResponse:
-        """Ép AI trả về chuẩn JSON."""
         sys_json = system_instruction + "\nBẮT BUỘC TRẢ VỀ ĐỊNH DẠNG JSON. KHÔNG KÈM THEO MARKDOWN HAY VĂN BẢN NÀO KHÁC."
         return self.generate_text(prompt, sys_json)
 
     def generate_markdown(self, prompt: str, system_instruction: str = "") -> AIResponse:
-        """Ép AI trả về Markdown."""
         sys_md = system_instruction + "\nBẮT BUỘC TRẢ VỀ ĐỊNH DẠNG MARKDOWN CHUẨN."
         return self.generate_text(prompt, sys_md)
 
@@ -166,14 +149,6 @@ class AIEngine:
         retry=retry_if_exception_type((NetworkError, TimeoutError))
     )
     def generate_text(self, prompt: str, system_instruction: str = "", stream: bool = False) -> Union[AIResponse, Generator]:
-        """
-        Gửi yêu cầu tới AI với các cơ chế bảo vệ.
-        
-        Args:
-            prompt: Câu lệnh chính.
-            system_instruction: Hướng dẫn hệ thống.
-            stream: Nếu True, trả về Generator.
-        """
         cache_key = hash(f"{self.provider_type}_{self.model_name}_{system_instruction}_{prompt}")
         if not stream and cache_key in prompt_cache:
             logger.info("⚡ Trả về kết quả từ Cache.")
@@ -214,14 +189,16 @@ class AIEngine:
             raise AIEngineError(f"Lỗi hệ thống AI: {str(e)}")
 
     # ==========================================
-    # CÁC TRÌNH ĐIỀU KHIỂN CỤ THỂ
+    # TRÌNH ĐIỀU KHIỂN CỤ THỂ
     # ==========================================
     
     def _call_gemini_sdk(self, prompt: str, system_instruction: str) -> AIResponse:
-        """Tích hợp chuẩn SDK mới: google-genai"""
+        """Sử dụng thuần túy SDK google-genai mới"""
         try:
+            # Không dùng genai.configure, truyền key trực tiếp vào Client
             client = genai.Client(api_key=self.api_key)
             
+            # Sử dụng đúng Config Class của SDK mới
             config = types.GenerateContentConfig(
                 temperature=DEFAULT_TEMP,
                 top_p=DEFAULT_TOP_P,
@@ -229,6 +206,7 @@ class AIEngine:
                 system_instruction=system_instruction if system_instruction else None
             )
             
+            # Gọi API sinh nội dung
             res = client.models.generate_content(
                 model=self.model_name,
                 contents=prompt,
@@ -248,10 +226,13 @@ class AIEngine:
                 completion_tokens=c_tokens,
                 total_tokens=p_tokens + c_tokens
             )
+        except APIError as e:
+            err_msg = str(e).lower()
+            if "api_key" in err_msg or "401" in err_msg or "403" in err_msg:
+                raise AuthenticationError(f"Lỗi xác thực API Key Gemini: {str(e)}")
+            raise NetworkError(f"Lỗi API Gemini: {str(e)}")
         except Exception as e:
-            if "API_KEY" in str(e).upper() or "400" in str(e) or "401" in str(e) or "403" in str(e):
-                raise AuthenticationError(f"API Key Gemini không hợp lệ. Chi tiết: {str(e)}")
-            raise NetworkError(str(e))
+            raise NetworkError(f"Lỗi kết nối SDK Gemini: {str(e)}")
 
     def _call_openai(self, prompt: str, system_instruction: str) -> AIResponse:
         try:
