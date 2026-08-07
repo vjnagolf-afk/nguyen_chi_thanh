@@ -1,0 +1,19 @@
+{
+  "subjects": {
+    "KHTN_7": {
+      "name": "Khoa học Tự nhiên 7",
+      "topics": [
+        {
+          "id": "chu_de_1",
+          "name": "Chủ đề 1: Nguyên tử - Nguyên tố hóa học",
+          "total_lessons": 8,
+          "standards": {
+            "nhan_biet": ["Trình bày được mô hình nguyên tử...", "Nêu được khái niệm nguyên tố hóa học..."],
+            "thong_hieu": ["Giải thích được sự tạo thành liên kết..."],
+            "van_dung": ["Tính được khối lượng nguyên tử..."]
+          }
+        }
+      ]
+    }
+  }
+}
