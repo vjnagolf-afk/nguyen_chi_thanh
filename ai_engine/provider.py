@@ -51,7 +51,6 @@ class AIEngine:
         self.api_key = api_key.strip()
         self.model_name = model_name.strip()
         self.timeout = timeout
-        self.session = requests.Session()
         
         self._is_ready = bool(self.api_key or self.provider_type == "Ollama")
         self._validate_provider()
@@ -79,7 +78,6 @@ class AIEngine:
             raise AuthenticationError(f"Kiểm tra kết nối thất bại: {str(e)}")
 
     def generate_with_fallback(self, prompt: str, system_instruction: str = "") -> AIResponse:
-        # Fallback cô lập trong cùng Provider, dùng chung API Key
         fallbacks = []
         if self.provider_type == "OpenRouter": fallbacks = ["google/gemini-2.5-flash", "google/gemini-1.5-pro", "meta-llama/llama-3-8b-instruct"]
         elif self.provider_type == "Gemini": fallbacks = ["gemini-2.5-flash", "gemini-1.5-pro", "gemini-1.5-flash"]
@@ -96,17 +94,13 @@ class AIEngine:
                 
         return self.generate_text(prompt, system_instruction)
 
-    # --- ĐÃ KHÔI PHỤC LẠI HÀM GENERATE_JSON VÀ GENERATE_MARKDOWN ---
     def generate_json(self, prompt: str, system_instruction: str = "") -> AIResponse:
-        """Ép AI trả về chuẩn JSON."""
         sys_json = system_instruction + "\nBẮT BUỘC TRẢ VỀ ĐỊNH DẠNG JSON. KHÔNG DÙNG ```json HAY KÈM THEO BẤT KỲ VĂN BẢN NÀO KHÁC."
         return self.generate_text(prompt, sys_json)
 
     def generate_markdown(self, prompt: str, system_instruction: str = "") -> AIResponse:
-        """Ép AI trả về Markdown."""
         sys_md = system_instruction + "\nBẮT BUỘC TRẢ VỀ ĐỊNH DẠNG MARKDOWN CHUẨN."
         return self.generate_text(prompt, sys_md)
-    # ----------------------------------------------------------------
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10), retry=retry_if_exception_type((NetworkError, TimeoutError)))
     def generate_text(self, prompt: str, system_instruction: str = "", stream: bool = False) -> Union[AIResponse, Generator]:
@@ -170,10 +164,23 @@ class AIEngine:
             raise NetworkError(str(e))
 
     def _call_openrouter(self, prompt: str, system_instruction: str) -> AIResponse:
-        url = "[https://openrouter.ai/api/v1/chat/completions](https://openrouter.ai/api/v1/chat/completions)"
-        headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
-        payload = {"model": self.model_name, "messages": self._build_messages(system_instruction, prompt), "temperature": DEFAULT_TEMP, "max_tokens": DEFAULT_MAX_TOKENS}
-        res = self.session.post(url, headers=headers, json=payload, timeout=self.timeout)
+        # Sử dụng requests.post trực tiếp, cắt bỏ hoàn toàn các ký tự ẩn trong URL bằng .strip()
+        url = "[https://openrouter.ai/api/v1/chat/completions](https://openrouter.ai/api/v1/chat/completions)".strip()
+        headers = {
+            "Authorization": f"Bearer {self.api_key}", 
+            "Content-Type": "application/json",
+            "HTTP-Referer": "[https://github.com/giangvien/edu-ai](https://github.com/giangvien/edu-ai)",
+            "X-Title": "AI Exam Generator"
+        }
+        payload = {
+            "model": self.model_name, 
+            "messages": self._build_messages(system_instruction, prompt), 
+            "temperature": DEFAULT_TEMP, 
+            "max_tokens": DEFAULT_MAX_TOKENS
+        }
+        
+        # Bỏ self.session, dùng trực tiếp requests.post để tránh lỗi connection adapters
+        res = requests.post(url, headers=headers, json=payload, timeout=self.timeout)
         
         if res.status_code == 401: raise AuthenticationError("Sai API Key OpenRouter.")
         if res.status_code in [402, 429]: raise QuotaExceededError("Hết Credits hoặc quá tải OpenRouter.")
@@ -186,12 +193,32 @@ class AIEngine:
             raise AIEngineError(f"OpenRouter Error: {msg}")
             
         usage = data.get("usage", {})
-        return AIResponse(text=data["choices"][0]["message"]["content"], provider="OpenRouter", model=self.model_name, latency=0.0, prompt_tokens=usage.get("prompt_tokens", 0), completion_tokens=usage.get("completion_tokens", 0), total_tokens=usage.get("total_tokens", 0))
+        return AIResponse(
+            text=data["choices"][0]["message"]["content"], 
+            provider="OpenRouter", 
+            model=self.model_name, 
+            latency=0.0, 
+            prompt_tokens=usage.get("prompt_tokens", 0), 
+            completion_tokens=usage.get("completion_tokens", 0), 
+            total_tokens=usage.get("total_tokens", 0)
+        )
 
     def _call_ollama(self, prompt: str, system_instruction: str) -> AIResponse:
-        url = "http://localhost:11434/api/generate"
-        payload = {"model": self.model_name, "prompt": f"{system_instruction}\n\n{prompt}" if system_instruction else prompt, "stream": False}
-        res = self.session.post(url, json=payload, timeout=self.timeout)
+        url = "http://localhost:11434/api/generate".strip()
+        payload = {
+            "model": self.model_name, 
+            "prompt": f"{system_instruction}\n\n{prompt}" if system_instruction else prompt, 
+            "stream": False
+        }
+        res = requests.post(url, json=payload, timeout=self.timeout)
         res.raise_for_status()
         data = res.json()
-        return AIResponse(text=data["response"], provider="Ollama", model=self.model_name, latency=0.0, prompt_tokens=data.get("prompt_eval_count", 0), completion_tokens=data.get("eval_count", 0), total_tokens=data.get("prompt_eval_count", 0) + data.get("eval_count", 0))
+        return AIResponse(
+            text=data["response"], 
+            provider="Ollama", 
+            model=self.model_name, 
+            latency=0.0, 
+            prompt_tokens=data.get("prompt_eval_count", 0), 
+            completion_tokens=data.get("eval_count", 0), 
+            total_tokens=data.get("prompt_eval_count", 0) + data.get("eval_count", 0)
+        )
