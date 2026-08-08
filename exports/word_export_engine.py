@@ -1,6 +1,7 @@
 """
 ============================================================
 XUẤT BẢN WORD - BỘ ĐIỀU PHỐI TRUNG TÂM (WORD EXPORT ENGINE)
+Bộ chuyển đổi Markdown thuần túy (Preserve Math/LaTeX).
 ============================================================
 """
 
@@ -15,19 +16,16 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 class WordExportEngine:
     @staticmethod
     def _parse_inline_text(paragraph, text: str):
-        # Tách chuỗi. Tự động cắt bỏ các dấu $ để file Word đọc trơn tru như đánh máy.
-        tokens = re.split(r'(\*\*.*?\*\*|\$\$.*?\$\$|\$.*?\$)', text)
+        """Xử lý in đậm/nghiêng bằng markdown (** / *). TUYỆT ĐỐI BẢO TOÀN dấu $ cho công thức Word."""
+        # Regex tìm **bold**, *italic*. Không chạm vào $
+        tokens = re.split(r'(\*\*.*?\*\*|\*.*?\*)', text)
         for token in tokens:
-            if not token:
-                continue
+            if not token: continue
             if token.startswith('**') and token.endswith('**'):
                 run = paragraph.add_run(token[2:-2])
                 run.bold = True
-            elif token.startswith('$$') and token.endswith('$$'):
-                run = paragraph.add_run(token[2:-2]) # Cắt bỏ dấu $$
-                run.italic = True
-            elif token.startswith('$') and token.endswith('$'):
-                run = paragraph.add_run(token[1:-1]) # Cắt bỏ dấu $
+            elif token.startswith('*') and token.endswith('*') and not token.startswith('**'):
+                run = paragraph.add_run(token[1:-1])
                 run.italic = True
             else:
                 paragraph.add_run(token)
@@ -35,10 +33,7 @@ class WordExportEngine:
     @staticmethod
     def convert_markdown_to_docx_bytes(markdown_text: str, template_path: str = None) -> bytes:
         try:
-            if template_path and os.path.exists(template_path):
-                doc = Document(template_path)
-            else:
-                doc = Document()
+            doc = Document(template_path) if template_path and os.path.exists(template_path) else Document()
             
             for section in doc.sections:
                 section.top_margin = Cm(1.5)
@@ -50,21 +45,17 @@ class WordExportEngine:
             style.font.name = 'Times New Roman'
             style.font.size = Pt(13)
             
-            if not markdown_text:
-                markdown_text = "Không có nội dung xuất bản."
-
+            if not markdown_text: markdown_text = "Không có nội dung."
             lines = str(markdown_text).split('\n')
+            
             in_table = False
             table_data = []
 
             def render_buffered_table():
                 if not table_data: return
-                
-                # Bỏ qua các dòng phân cách của Markdown
                 valid_rows = [row for row in table_data if not re.match(r'^[\s\|:\.-]+$', row)]
                 if not valid_rows: return
                 
-                # Cân bằng số cột: Tránh lỗi bảng rỗng do Markdown bị gãy dòng
                 num_cols = max(len([c for c in row.strip().strip('|').split('|')]) for row in valid_rows)
                 if num_cols == 0: return
 
@@ -77,25 +68,24 @@ class WordExportEngine:
                         cell_text = cells[j] if j < len(cells) else ""
                         cell = table.cell(i, j)
                         cell.text = "" 
-                        p = cell.paragraphs[0]
-                        WordExportEngine._parse_inline_text(p, cell_text)
+                        WordExportEngine._parse_inline_text(cell.paragraphs[0], cell_text)
             
             for line in lines:
                 line_clean = line.strip()
                 
+                # BẮT BẢNG MARKDOWN CHUẨN
                 if line_clean.startswith('|') and line_clean.endswith('|'):
                     in_table = True
                     table_data.append(line_clean)
                     continue
-                else:
-                    if in_table:
-                        render_buffered_table()
-                        in_table = False
-                        table_data = []
+                elif in_table:
+                    render_buffered_table()
+                    in_table = False
+                    table_data = []
 
-                if not line_clean:
-                    continue
+                if not line_clean: continue
                 
+                # HEADING
                 if line_clean.startswith('#'):
                     level = len(line_clean) - len(line_clean.lstrip('#'))
                     text = line_clean.lstrip('#').strip()
@@ -108,21 +98,21 @@ class WordExportEngine:
                         run.font.size = Pt(16) if level == 1 else Pt(14)
                     continue
 
+                # PARAGRAPH & LIST
                 p = doc.add_paragraph()
                 p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
                 
-                if line_clean.startswith('*'):
+                if line_clean.startswith('- ') or line_clean.startswith('* '):
                     p.paragraph_format.left_indent = Cm(0.5)
-                    line_clean = line_clean.lstrip('* ')
-                elif re.match(r'^[a-zA-Z]\)\s+', line_clean) or re.match(r'^\d+\.\s+', line_clean) or line_clean.startswith('-'):
+                    line_clean = line_clean[2:]
+                elif re.match(r'^[a-zA-Z]\)\s+', line_clean) or re.match(r'^\d+\.\s+', line_clean):
                     p.paragraph_format.left_indent = Cm(0.3)
                 else:
                     p.paragraph_format.first_line_indent = Cm(1.0)
                     
                 WordExportEngine._parse_inline_text(p, line_clean)
 
-            if in_table:
-                render_buffered_table()
+            if in_table: render_buffered_table()
 
             f = io.BytesIO()
             doc.save(f)
@@ -130,8 +120,4 @@ class WordExportEngine:
             
         except Exception as e:
             logger.error(f"Lỗi xuất bản file Word: {str(e)}")
-            err_doc = Document()
-            err_doc.add_paragraph(f"Đã xảy ra lỗi khi tạo file Word: {str(e)}")
-            f = io.BytesIO()
-            err_doc.save(f)
-            return f.getvalue()
+            return b""
