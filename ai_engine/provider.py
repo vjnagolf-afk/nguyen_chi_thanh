@@ -18,6 +18,7 @@ from openai import OpenAI
 import anthropic
 from google import genai
 from google.genai import types
+from google.genai.errors import APIError
 
 DEFAULT_TIMEOUT = 120
 DEFAULT_TEMP = 0.2
@@ -75,28 +76,39 @@ class AIEngine:
             res = self.generate_text(prompt="Ping.", system_instruction="Chỉ trả lời 'Pong'.")
             return bool(res and res.text)
         except (AuthenticationError, QuotaExceededError, NetworkError, TimeoutError, ModelNotFoundError) as e:
-            # Propagate exactly the correctly mapped error
             raise e
         except Exception as e:
-            # Fallback to NetworkError, strictly avoiding masking as AuthenticationError
             raise NetworkError(f"Lỗi hệ thống hoặc đường truyền: {str(e)}")
 
     def generate_with_fallback(self, prompt: str, system_instruction: str = "") -> AIResponse:
-        fallbacks = []
-        if self.provider_type == "OpenRouter": fallbacks = ["google/gemini-2.5-flash", "google/gemini-1.5-pro", "meta-llama/llama-3-8b-instruct"]
-        elif self.provider_type == "Gemini": fallbacks = ["gemini-2.5-flash", "gemini-1.5-pro", "gemini-1.5-flash"]
-        elif self.provider_type == "OpenAI": fallbacks = ["gpt-4o-mini", "gpt-3.5-turbo"]
+        try:
+            # Ưu tiên chạy model chính trước
+            return self.generate_text(prompt, system_instruction)
+        except (AuthenticationError, QuotaExceededError) as e:
+            # Lỗi chí mạng (Sai Key, Hết tiền) -> Dừng luôn, không Fallback vô ích
+            logger.error(f"Lỗi chí mạng, từ chối Fallback: {str(e)}")
+            raise e
+        except Exception as e_main:
+            logger.warning(f"Lỗi {self.model_name}: {str(e_main)}. Bắt đầu Fallback...")
             
-        for fallback_model in fallbacks:
-            if fallback_model == self.model_name: continue
-            try:
-                temp_engine = AIEngine(provider_type=self.provider_type, api_key=self.api_key, model_name=fallback_model, timeout=self.timeout)
-                logger.warning(f"Đang thử Fallback sang model {fallback_model}...")
-                return temp_engine.generate_text(prompt, system_instruction)
-            except Exception as e:
-                logger.error(f"Fallback model {fallback_model} thất bại: {e}")
+            fallbacks = []
+            if self.provider_type == "OpenRouter": fallbacks = ["google/gemini-2.5-flash", "google/gemini-1.5-pro", "meta-llama/llama-3-8b-instruct"]
+            elif self.provider_type == "Gemini": fallbacks = ["gemini-2.5-flash", "gemini-1.5-pro", "gemini-1.5-flash"]
+            elif self.provider_type == "OpenAI": fallbacks = ["gpt-4o-mini", "gpt-3.5-turbo"]
                 
-        return self.generate_text(prompt, system_instruction)
+            for fallback_model in fallbacks:
+                if fallback_model == self.model_name: continue
+                try:
+                    temp_engine = AIEngine(provider_type=self.provider_type, api_key=self.api_key, model_name=fallback_model, timeout=self.timeout)
+                    logger.info(f"Đang thử Fallback sang {fallback_model}...")
+                    return temp_engine.generate_text(prompt, system_instruction)
+                except (AuthenticationError, QuotaExceededError) as e:
+                    raise e
+                except Exception as e_fallback:
+                    logger.error(f"Fallback {fallback_model} thất bại: {e_fallback}")
+                    
+            # Nếu tất cả Fallback đều lỗi, trả về lỗi gốc
+            raise e_main
 
     def generate_json(self, prompt: str, system_instruction: str = "") -> AIResponse:
         sys_json = system_instruction + "\nBẮT BUỘC TRẢ VỀ ĐỊNH DẠNG JSON. KHÔNG DÙNG ```json HAY KÈM THEO BẤT KỲ VĂN BẢN NÀO KHÁC."
@@ -110,7 +122,7 @@ class AIEngine:
         stop=stop_after_attempt(3), 
         wait=wait_exponential(multiplier=1, min=2, max=10), 
         retry=retry_if_exception_type((NetworkError, TimeoutError)),
-        reraise=True  # Reraise ensures the underlying exception is propagated, not RetryError
+        reraise=True
     )
     def generate_text(self, prompt: str, system_instruction: str = "", stream: bool = False) -> Union[AIResponse, Generator]:
         if not self.is_ready(): raise AuthenticationError("AI chưa sẵn sàng.")
@@ -193,7 +205,7 @@ class AIEngine:
             err_msg = str(e).lower()
             if "401" in err_msg or "authentication" in err_msg: 
                 raise AuthenticationError("Sai API Key OpenAI.")
-            if "404" in err_msg or "model" in err_msg: 
+            if "404" in err_msg or "model not found" in err_msg: 
                 raise ModelNotFoundError("Model không tồn tại trên OpenAI.")
             if "429" in err_msg or "quota" in err_msg: 
                 raise QuotaExceededError("Hết Quota hoặc Rate limit OpenAI.")
@@ -224,7 +236,7 @@ class AIEngine:
             err_msg = str(e).lower()
             if "authentication" in err_msg or "401" in err_msg: 
                 raise AuthenticationError("Sai API Key Claude.")
-            if "404" in err_msg or "model" in err_msg or "not_found" in err_msg: 
+            if "404" in err_msg or "not_found" in err_msg: 
                 raise ModelNotFoundError("Model Claude không tồn tại.")
             if "429" in err_msg or "rate_limit" in err_msg or "overloaded" in err_msg: 
                 raise QuotaExceededError("Quá giới hạn request Claude.")
