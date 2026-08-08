@@ -22,7 +22,7 @@ from google.genai.errors import APIError
 
 DEFAULT_TIMEOUT = 120
 DEFAULT_TEMP = 0.2
-DEFAULT_MAX_TOKENS = 3500
+DEFAULT_MAX_TOKENS = 8192
 DEFAULT_TOP_P = 0.95
 
 class AIEngineError(Exception): pass
@@ -96,6 +96,18 @@ class AIEngine:
                 
         return self.generate_text(prompt, system_instruction)
 
+    # --- ĐÃ KHÔI PHỤC LẠI HÀM GENERATE_JSON VÀ GENERATE_MARKDOWN ---
+    def generate_json(self, prompt: str, system_instruction: str = "") -> AIResponse:
+        """Ép AI trả về chuẩn JSON."""
+        sys_json = system_instruction + "\nBẮT BUỘC TRẢ VỀ ĐỊNH DẠNG JSON. KHÔNG DÙNG ```json HAY KÈM THEO BẤT KỲ VĂN BẢN NÀO KHÁC."
+        return self.generate_text(prompt, sys_json)
+
+    def generate_markdown(self, prompt: str, system_instruction: str = "") -> AIResponse:
+        """Ép AI trả về Markdown."""
+        sys_md = system_instruction + "\nBẮT BUỘC TRẢ VỀ ĐỊNH DẠNG MARKDOWN CHUẨN."
+        return self.generate_text(prompt, sys_md)
+    # ----------------------------------------------------------------
+
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=2, max=10), retry=retry_if_exception_type((NetworkError, TimeoutError)))
     def generate_text(self, prompt: str, system_instruction: str = "", stream: bool = False) -> Union[AIResponse, Generator]:
         if not self.is_ready(): raise AuthenticationError("AI chưa sẵn sàng.")
@@ -158,7 +170,7 @@ class AIEngine:
             raise NetworkError(str(e))
 
     def _call_openrouter(self, prompt: str, system_instruction: str) -> AIResponse:
-        url = "https://openrouter.ai/api/v1/chat/completions"
+        url = "[https://openrouter.ai/api/v1/chat/completions](https://openrouter.ai/api/v1/chat/completions)"
         headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
         payload = {"model": self.model_name, "messages": self._build_messages(system_instruction, prompt), "temperature": DEFAULT_TEMP, "max_tokens": DEFAULT_MAX_TOKENS}
         res = self.session.post(url, headers=headers, json=payload, timeout=self.timeout)
@@ -178,7 +190,7 @@ class AIEngine:
 
     def _call_ollama(self, prompt: str, system_instruction: str) -> AIResponse:
         url = "http://localhost:11434/api/generate"
-        payload = {"model": self.model_name, "prompt": f"{system_instruction}\\n\\n{prompt}" if system_instruction else prompt, "stream": False}
+        payload = {"model": self.model_name, "prompt": f"{system_instruction}\n\n{prompt}" if system_instruction else prompt, "stream": False}
         res = self.session.post(url, json=payload, timeout=self.timeout)
         res.raise_for_status()
         data = res.json()
