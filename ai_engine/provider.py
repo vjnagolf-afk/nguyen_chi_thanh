@@ -1,35 +1,40 @@
 """
-AI ENGINE PROVIDER - ENTERPRISE GATEWAY
-========================================
+AI ENGINE PROVIDER - STABLE GATEWAY
+===================================
+
 Hỗ trợ:
+- OpenAI Direct
 - OpenRouter
 - Gemini Direct
-- OpenAI Direct
 - Anthropic / Claude
 - Ollama Local
 
-Mục tiêu:
-- API thống nhất cho toàn hệ thống.
+Nguyên tắc:
+- Một interface thống nhất cho toàn hệ thống.
 - Phân loại lỗi rõ ràng.
-- Retry chỉ dành cho lỗi mạng / timeout.
-- Không retry lỗi API Key / quota / model.
-- Fallback chỉ khi phù hợp.
-- Không để Markdown URL lọt vào cấu hình.
+- Không retry API Key / quota / model.
+- Chỉ retry lỗi mạng / timeout.
+- Không fallback khi API Key hoặc quota bị lỗi.
+- OpenRouter sử dụng OpenAI-compatible API.
+- Không sử dụng Markdown URL trong cấu hình.
 """
 
+from __future__ import annotations
+
+import hashlib
 import time
 from dataclasses import dataclass
-from typing import List, Dict, Union, Generator
+from typing import Dict, Generator, List, Union
 
 import requests
+from cachetools import TTLCache
 from loguru import logger
 from tenacity import (
     retry,
+    retry_if_exception_type,
     stop_after_attempt,
     wait_exponential,
-    retry_if_exception_type,
 )
-from cachetools import TTLCache
 
 from openai import OpenAI
 import anthropic
@@ -39,7 +44,7 @@ from google.genai import types
 
 
 # ============================================================
-# 1. CẤU HÌNH CHUNG
+# 1. CONFIGURATION
 # ============================================================
 
 DEFAULT_TIMEOUT = 120
@@ -55,7 +60,7 @@ OLLAMA_BASE_URL = "http://localhost:11434"
 
 
 # ============================================================
-# 2. CUSTOM EXCEPTIONS
+# 2. EXCEPTIONS
 # ============================================================
 
 class AIEngineError(Exception):
@@ -67,7 +72,7 @@ class AuthenticationError(AIEngineError):
 
 
 class ModelNotFoundError(AIEngineError):
-    """Model không tồn tại / không khả dụng."""
+    """Model không tồn tại hoặc không khả dụng."""
 
 
 class QuotaExceededError(AIEngineError):
@@ -75,7 +80,7 @@ class QuotaExceededError(AIEngineError):
 
 
 class NetworkError(AIEngineError):
-    """Lỗi mạng / server."""
+    """Lỗi mạng hoặc server."""
 
 
 class TimeoutError(AIEngineError):
@@ -83,7 +88,7 @@ class TimeoutError(AIEngineError):
 
 
 # ============================================================
-# 3. RESPONSE OBJECT
+# 3. RESPONSE
 # ============================================================
 
 @dataclass
@@ -119,11 +124,18 @@ class AIEngine:
     def __init__(
         self,
         provider_type: str,
-        api_key: str,
-        model_name: str,
+        api_key: str = "",
+        model_name: str = "",
         timeout: int = DEFAULT_TIMEOUT,
     ):
-        self.provider_type = provider_type.strip().split()[0]
+        self.provider_type = (
+            (provider_type or "")
+            .strip()
+            .split()[0]
+            if provider_type
+            else ""
+        )
+
         self.api_key = (api_key or "").strip()
         self.model_name = (model_name or "").strip()
         self.timeout = timeout
@@ -149,45 +161,51 @@ class AIEngine:
     # VALIDATE PROVIDER
     # ========================================================
 
-    def _validate_provider(self):
+    def _validate_provider(self) -> None:
 
-        model_lower = self.model_name.lower()
+        if not self.provider_type:
+            raise AIEngineError(
+                "Chưa xác định AI Provider."
+            )
 
         if not self.model_name:
             raise ModelNotFoundError(
                 "Chưa nhập tên model."
             )
 
+        model = self.model_name.lower()
+
         if self.provider_type == "Gemini":
 
-            if "gemini" not in model_lower:
+            if "gemini" not in model:
                 raise ModelNotFoundError(
-                    "Model không đúng định dạng Gemini."
+                    "Model Gemini không hợp lệ."
                 )
 
         elif self.provider_type == "OpenAI":
 
-            if (
-                "gpt" not in model_lower
-                and "o1" not in model_lower
-                and "o3" not in model_lower
-                and "o4" not in model_lower
+            if not any(
+                key in model
+                for key in (
+                    "gpt",
+                    "o1",
+                    "o3",
+                    "o4",
+                )
             ):
                 raise ModelNotFoundError(
-                    "Model không đúng định dạng OpenAI."
+                    "Model OpenAI không hợp lệ."
                 )
 
         elif self.provider_type == "Anthropic":
 
-            if "claude" not in model_lower:
+            if "claude" not in model:
                 raise ModelNotFoundError(
-                    "Model không đúng định dạng Claude."
+                    "Model Anthropic không hợp lệ."
                 )
 
         elif self.provider_type == "OpenRouter":
 
-            # OpenRouter dùng dạng:
-            # provider/model
             if "/" not in self.model_name:
                 raise ModelNotFoundError(
                     "Model OpenRouter phải có dạng provider/model."
@@ -195,13 +213,13 @@ class AIEngine:
 
         elif self.provider_type == "Ollama":
 
-            # Ollama không cần kiểm tra API key.
             pass
 
         else:
 
             raise AIEngineError(
-                f"Provider không được hỗ trợ: {self.provider_type}"
+                f"Provider không được hỗ trợ: "
+                f"{self.provider_type}"
             )
 
     # ========================================================
@@ -214,7 +232,7 @@ class AIEngine:
         prompt: str,
     ) -> List[Dict[str, str]]:
 
-        messages = []
+        messages: List[Dict[str, str]] = []
 
         if system_instruction:
             messages.append(
@@ -238,16 +256,6 @@ class AIEngine:
     # ========================================================
 
     def test_connection(self) -> bool:
-        """
-        Kiểm tra kết nối AI.
-
-        Không che giấu lỗi:
-        - AuthenticationError
-        - ModelNotFoundError
-        - QuotaExceededError
-        - NetworkError
-        - TimeoutError
-        """
 
         try:
 
@@ -277,7 +285,7 @@ class AIEngine:
 
             raise NetworkError(
                 f"Lỗi hệ thống hoặc đường truyền: {exc}"
-            )
+            ) from exc
 
     # ========================================================
     # FALLBACK
@@ -289,10 +297,6 @@ class AIEngine:
         system_instruction: str = "",
     ) -> AIResponse:
 
-        # ----------------------------------------------------
-        # 1. Luôn thử model chính trước.
-        # ----------------------------------------------------
-
         try:
 
             return self.generate_text(
@@ -301,61 +305,42 @@ class AIEngine:
             )
 
         except AuthenticationError:
-            # Sai API key -> KHÔNG fallback.
+            # Sai API Key -> KHÔNG fallback.
             raise
 
         except QuotaExceededError:
-            # Hết tiền/quota -> KHÔNG fallback.
+            # Hết quota -> KHÔNG fallback.
             raise
 
-        except ModelNotFoundError as main_error:
-
-            logger.warning(
-                f"Model chính không khả dụng: "
-                f"{self.model_name}"
-            )
-
-            original_error = main_error
-
         except (
+            ModelNotFoundError,
             NetworkError,
             TimeoutError,
         ) as main_error:
 
             logger.warning(
-                f"Model chính gặp lỗi mạng/timeout: "
-                f"{main_error}"
+                f"{self.provider_type}/{self.model_name} "
+                f"không khả dụng: {main_error}"
             )
 
             original_error = main_error
 
-        except Exception as main_error:
-
-            logger.error(
-                f"Lỗi ngoài dự kiến: {main_error}"
-            )
-
-            raise
-
         # ----------------------------------------------------
-        # 2. Danh sách fallback.
+        # Fallback cùng provider
         # ----------------------------------------------------
 
-        fallbacks = []
-
-        if self.provider_type == "OpenRouter":
-
-            fallbacks = [
-                "google/gemini-2.5-flash",
-                "openai/gpt-4o-mini",
-                "anthropic/claude-sonnet-4",
-            ]
-
-        elif self.provider_type == "Gemini":
+        if self.provider_type == "Gemini":
 
             fallbacks = [
                 "gemini-2.5-flash",
                 "gemini-2.0-flash",
+            ]
+
+        elif self.provider_type == "OpenRouter":
+
+            fallbacks = [
+                "google/gemini-2.5-flash",
+                "openai/gpt-4o-mini",
             ]
 
         elif self.provider_type == "OpenAI":
@@ -364,44 +349,43 @@ class AIEngine:
                 "gpt-4o-mini",
             ]
 
-        # Anthropic và Ollama:
-        # Không tự ý fallback sang provider khác.
+        else:
+
+            fallbacks = []
 
         # ----------------------------------------------------
-        # 3. Thử fallback.
+        # Try fallback
         # ----------------------------------------------------
 
-        for fallback_model in fallbacks:
+        for model in fallbacks:
 
-            if fallback_model == self.model_name:
+            if model == self.model_name:
                 continue
 
             try:
 
-                logger.warning(
-                    f"Đang thử fallback: "
-                    f"{self.provider_type} → "
-                    f"{fallback_model}"
+                logger.info(
+                    f"Fallback "
+                    f"{self.provider_type}: "
+                    f"{self.model_name} -> {model}"
                 )
 
-                fallback_engine = AIEngine(
+                engine = AIEngine(
                     provider_type=self.provider_type,
                     api_key=self.api_key,
-                    model_name=fallback_model,
+                    model_name=model,
                     timeout=self.timeout,
                 )
 
-                return fallback_engine.generate_text(
+                return engine.generate_text(
                     prompt,
                     system_instruction,
                 )
 
             except AuthenticationError:
-                # API key sai -> dừng.
                 raise
 
             except QuotaExceededError:
-                # Hết quota -> dừng.
                 raise
 
             except (
@@ -411,18 +395,13 @@ class AIEngine:
             ) as exc:
 
                 logger.warning(
-                    f"Fallback {fallback_model} thất bại: "
-                    f"{exc}"
+                    f"Fallback {model} thất bại: {exc}"
                 )
-
-        # ----------------------------------------------------
-        # 4. Tất cả fallback thất bại.
-        # ----------------------------------------------------
 
         raise original_error
 
     # ========================================================
-    # GENERATE JSON
+    # JSON
     # ========================================================
 
     def generate_json(
@@ -431,25 +410,22 @@ class AIEngine:
         system_instruction: str = "",
     ) -> AIResponse:
 
-        sys_json = (
+        instruction = (
             system_instruction
             + "\n\n"
-            "BẮT BUỘC TRẢ VỀ JSON HỢP LỆ."
-            "\n"
-            "KHÔNG dùng ```json."
-            "\n"
-            "KHÔNG thêm lời giải thích."
-            "\n"
+            "BẮT BUỘC TRẢ VỀ JSON HỢP LỆ.\n"
+            "KHÔNG dùng ```json.\n"
+            "KHÔNG thêm giải thích.\n"
             "CHỈ TRẢ VỀ JSON."
         )
 
         return self.generate_text(
             prompt,
-            sys_json,
+            instruction,
         )
 
     # ========================================================
-    # GENERATE MARKDOWN
+    # MARKDOWN
     # ========================================================
 
     def generate_markdown(
@@ -458,7 +434,7 @@ class AIEngine:
         system_instruction: str = "",
     ) -> AIResponse:
 
-        sys_md = (
+        instruction = (
             system_instruction
             + "\n\n"
             "BẮT BUỘC TRẢ VỀ MARKDOWN CHUẨN."
@@ -466,7 +442,7 @@ class AIEngine:
 
         return self.generate_text(
             prompt,
-            sys_md,
+            instruction,
         )
 
     # ========================================================
@@ -498,21 +474,18 @@ class AIEngine:
         if not self.is_ready():
 
             raise AuthenticationError(
-                "AI chưa sẵn sàng hoặc chưa có API Key."
+                f"{self.provider_type}: "
+                "Chưa có API Key hợp lệ."
             )
 
-        # ----------------------------------------------------
-        # CACHE
-        # ----------------------------------------------------
-
-        cache_key = hash(
+        cache_key = hashlib.sha256(
             (
-                self.provider_type,
-                self.model_name,
-                system_instruction,
-                prompt,
-            )
-        )
+                f"{self.provider_type}|"
+                f"{self.model_name}|"
+                f"{system_instruction}|"
+                f"{prompt}"
+            ).encode("utf-8")
+        ).hexdigest()
 
         if (
             not stream
@@ -523,10 +496,6 @@ class AIEngine:
         start_time = time.time()
 
         try:
-
-            # ------------------------------------------------
-            # PROVIDER DISPATCH
-            # ------------------------------------------------
 
             if self.provider_type == "Gemini":
 
@@ -579,11 +548,11 @@ class AIEngine:
 
             return response
 
-        except requests.exceptions.Timeout:
+        except requests.exceptions.Timeout as exc:
 
             raise TimeoutError(
                 "Timeout kết nối máy chủ AI."
-            )
+            ) from exc
 
         except (
             AuthenticationError,
@@ -598,11 +567,11 @@ class AIEngine:
         except Exception as exc:
 
             raise NetworkError(
-                f"Lỗi AI Provider: {exc}"
-            )
+                f"{self.provider_type}: {exc}"
+            ) from exc
 
     # ========================================================
-    # GEMINI
+    # GEMINI DIRECT
     # ========================================================
 
     def _call_gemini(
@@ -612,6 +581,11 @@ class AIEngine:
     ) -> AIResponse:
 
         try:
+
+            if not self.api_key:
+                raise AuthenticationError(
+                    "Gemini: Chưa nhập API Key."
+                )
 
             client = genai.Client(
                 api_key=self.api_key
@@ -640,28 +614,37 @@ class AIEngine:
                 None,
             )
 
-            prompt_tokens = (
+            prompt_tokens = int(
                 getattr(
                     usage,
                     "prompt_token_count",
                     0,
                 )
-                if usage
-                else 0
+                or 0
             )
 
-            completion_tokens = (
+            completion_tokens = int(
                 getattr(
                     usage,
                     "candidates_token_count",
                     0,
                 )
-                if usage
-                else 0
+                or 0
             )
 
+            text = getattr(
+                response,
+                "text",
+                None,
+            )
+
+            if not text:
+                raise NetworkError(
+                    "Gemini trả về phản hồi rỗng."
+                )
+
             return AIResponse(
-                text=response.text or "",
+                text=text,
                 provider="Gemini",
                 model=self.model_name,
                 latency=0.0,
@@ -673,6 +656,9 @@ class AIEngine:
                 ),
             )
 
+        except AuthenticationError:
+            raise
+
         except Exception as exc:
 
             self._raise_provider_error(
@@ -683,7 +669,7 @@ class AIEngine:
             raise
 
     # ========================================================
-    # OPENAI
+    # OPENAI DIRECT
     # ========================================================
 
     def _call_openai(
@@ -712,12 +698,10 @@ class AIEngine:
 
             usage = response.usage
 
+            choice = response.choices[0]
+
             return AIResponse(
-                text=(
-                    response.choices[0]
-                    .message.content
-                    or ""
-                ),
+                text=choice.message.content or "",
                 provider="OpenAI",
                 model=self.model_name,
                 latency=0.0,
@@ -737,7 +721,7 @@ class AIEngine:
                     else 0
                 ),
                 finish_reason=(
-                    response.choices[0].finish_reason
+                    choice.finish_reason
                     or "stop"
                 ),
             )
@@ -785,24 +769,38 @@ class AIEngine:
                 ],
             )
 
-            input_tokens = getattr(
-                response.usage,
-                "input_tokens",
-                0,
+            input_tokens = int(
+                getattr(
+                    response.usage,
+                    "input_tokens",
+                    0,
+                )
+                or 0
             )
 
-            output_tokens = getattr(
-                response.usage,
-                "output_tokens",
-                0,
+            output_tokens = int(
+                getattr(
+                    response.usage,
+                    "output_tokens",
+                    0,
+                )
+                or 0
             )
+
+            text = ""
+
+            if response.content:
+
+                first = response.content[0]
+
+                text = getattr(
+                    first,
+                    "text",
+                    "",
+                ) or ""
 
             return AIResponse(
-                text=(
-                    response.content[0].text
-                    if response.content
-                    else ""
-                ),
+                text=text,
                 provider="Anthropic",
                 model=self.model_name,
                 latency=0.0,
@@ -843,9 +841,14 @@ class AIEngine:
 
         try:
 
+            if not self.api_key:
+                raise AuthenticationError(
+                    "OpenRouter: Chưa nhập API Key."
+                )
+
             # QUAN TRỌNG:
-            # Đây là URL THUẦN.
-            # Tuyệt đối không thêm []() Markdown.
+            # URL phải là chuỗi thuần.
+            # KHÔNG dùng Markdown [URL](URL).
 
             client = OpenAI(
                 base_url=OPENROUTER_BASE_URL,
@@ -868,13 +871,10 @@ class AIEngine:
             )
 
             usage = response.usage
+            choice = response.choices[0]
 
             return AIResponse(
-                text=(
-                    response.choices[0]
-                    .message.content
-                    or ""
-                ),
+                text=choice.message.content or "",
                 provider="OpenRouter",
                 model=self.model_name,
                 latency=0.0,
@@ -894,10 +894,13 @@ class AIEngine:
                     else 0
                 ),
                 finish_reason=(
-                    response.choices[0].finish_reason
+                    choice.finish_reason
                     or "stop"
                 ),
             )
+
+        except AuthenticationError:
+            raise
 
         except Exception as exc:
 
@@ -931,83 +934,94 @@ class AIEngine:
 
         try:
 
-            response = requests.post(
+            response = self.session.post(
                 url,
                 json=payload,
                 timeout=self.timeout,
             )
 
+            if response.status_code == 404:
+
+                raise ModelNotFoundError(
+                    f"Ollama: Model "
+                    f"'{self.model_name}' "
+                    "không tồn tại."
+                )
+
             response.raise_for_status()
 
             data = response.json()
 
+            text = data.get(
+                "response",
+                "",
+            )
+
+            if not text:
+
+                raise NetworkError(
+                    "Ollama trả về phản hồi rỗng."
+                )
+
+            prompt_tokens = int(
+                data.get(
+                    "prompt_eval_count",
+                    0,
+                )
+                or 0
+            )
+
+            completion_tokens = int(
+                data.get(
+                    "eval_count",
+                    0,
+                )
+                or 0
+            )
+
             return AIResponse(
-                text=data.get(
-                    "response",
-                    "",
-                ),
+                text=text,
                 provider="Ollama",
                 model=self.model_name,
                 latency=0.0,
-                prompt_tokens=data.get(
-                    "prompt_eval_count",
-                    0,
-                ),
-                completion_tokens=data.get(
-                    "eval_count",
-                    0,
-                ),
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
                 total_tokens=(
-                    data.get(
-                        "prompt_eval_count",
-                        0,
-                    )
-                    + data.get(
-                        "eval_count",
-                        0,
-                    )
+                    prompt_tokens
+                    + completion_tokens
                 ),
             )
 
-        except requests.exceptions.ConnectionError:
+        except ModelNotFoundError:
+            raise
+
+        except requests.exceptions.ConnectionError as exc:
 
             raise NetworkError(
-                "Không thể kết nối Ollama. "
+                "Ollama không thể kết nối. "
                 "Nếu đang chạy Streamlit Cloud, "
-                "localhost là máy chủ Cloud chứ "
+                "localhost là máy chủ Cloud, "
                 "không phải máy tính cá nhân."
-            )
+            ) from exc
 
-        except requests.exceptions.Timeout:
+        except requests.exceptions.Timeout as exc:
 
             raise TimeoutError(
-                "Timeout khi kết nối Ollama."
-            )
+                "Ollama kết nối quá thời gian."
+            ) from exc
 
         except requests.exceptions.HTTPError as exc:
 
-            status = (
-                response.status_code
-                if response
-                else 0
-            )
-
-            if status == 404:
-
-                raise ModelNotFoundError(
-                    f"Model Ollama '{self.model_name}' "
-                    "không tồn tại."
-                )
-
             raise NetworkError(
-                f"Ollama HTTP {status}: {exc}"
-            )
+                f"Ollama HTTP "
+                f"{response.status_code}: {exc}"
+            ) from exc
 
         except Exception as exc:
 
             raise NetworkError(
-                f"Lỗi Ollama: {exc}"
-            )
+                f"Ollama: {exc}"
+            ) from exc
 
     # ========================================================
     # ERROR MAPPING
@@ -1017,124 +1031,148 @@ class AIEngine:
     def _raise_provider_error(
         provider: str,
         exc: Exception,
-    ):
+    ) -> None:
 
-        error_text = str(exc)
-        error_lower = error_text.lower()
+        text = str(exc or "")
+        lower = text.lower()
 
         # ----------------------------------------------------
         # Authentication
         # ----------------------------------------------------
 
+        authentication_patterns = (
+            "invalid api key",
+            "invalid_api_key",
+            "api key is invalid",
+            "incorrect api key",
+            "unauthorized",
+            "authentication",
+            "authenticationerror",
+            "401",
+        )
+
         if any(
-            x in error_lower
-            for x in [
-                "401",
-                "unauthorized",
-                "authentication",
-                "invalid api key",
-                "invalid_api_key",
-                "api key is invalid",
-                "forbidden",
-                "403",
-            ]
+            pattern in lower
+            for pattern in authentication_patterns
         ):
 
             raise AuthenticationError(
                 f"{provider}: API Key không hợp lệ "
                 "hoặc không có quyền truy cập."
-            )
+            ) from exc
 
         # ----------------------------------------------------
-        # Model
+        # Quota
         # ----------------------------------------------------
+
+        quota_patterns = (
+            "insufficient_quota",
+            "insufficient balance",
+            "quota",
+            "rate limit",
+            "rate_limit",
+            "too many requests",
+            "credits",
+            "402",
+            "429",
+        )
 
         if any(
-            x in error_lower
-            for x in [
-                "404",
-                "model not found",
-                "model_not_found",
-                "does not exist",
-                "unknown model",
-            ]
-        ):
-
-            raise ModelNotFoundError(
-                f"{provider}: Model không tồn tại "
-                "hoặc không khả dụng."
-            )
-
-        # ----------------------------------------------------
-        # Quota / Rate limit
-        # ----------------------------------------------------
-
-        if any(
-            x in error_lower
-            for x in [
-                "402",
-                "429",
-                "quota",
-                "rate limit",
-                "rate_limit",
-                "too many requests",
-                "credits",
-                "insufficient balance",
-            ]
+            pattern in lower
+            for pattern in quota_patterns
         ):
 
             raise QuotaExceededError(
                 f"{provider}: Hết quota/credits "
                 "hoặc vượt giới hạn request."
-            )
+            ) from exc
+
+        # ----------------------------------------------------
+        # Model
+        # ----------------------------------------------------
+
+        model_patterns = (
+            "model not found",
+            "model_not_found",
+            "unknown model",
+            "does not exist",
+            "no such model",
+        )
+
+        if any(
+            pattern in lower
+            for pattern in model_patterns
+        ):
+
+            raise ModelNotFoundError(
+                f"{provider}: Model không tồn tại "
+                "hoặc không khả dụng."
+            ) from exc
+
+        # 404 chỉ được xem là model lỗi nếu thực sự
+        # có dấu hiệu model trong thông báo.
+        if (
+            "404" in lower
+            and "model" in lower
+        ):
+
+            raise ModelNotFoundError(
+                f"{provider}: Model không tồn tại "
+                "hoặc không khả dụng."
+            ) from exc
 
         # ----------------------------------------------------
         # Timeout
         # ----------------------------------------------------
 
+        timeout_patterns = (
+            "timeout",
+            "timed out",
+            "time out",
+            "deadline exceeded",
+        )
+
         if any(
-            x in error_lower
-            for x in [
-                "timeout",
-                "timed out",
-                "time out",
-            ]
+            pattern in lower
+            for pattern in timeout_patterns
         ):
 
             raise TimeoutError(
                 f"{provider}: Timeout kết nối."
-            )
+            ) from exc
 
         # ----------------------------------------------------
-        # Network
+        # Network / Server
         # ----------------------------------------------------
+
+        network_patterns = (
+            "connection",
+            "connect",
+            "network",
+            "dns",
+            "socket",
+            "ssl",
+            "502",
+            "503",
+            "504",
+            "server error",
+            "temporarily unavailable",
+        )
 
         if any(
-            x in error_lower
-            for x in [
-                "connection",
-                "connect",
-                "network",
-                "dns",
-                "ssl",
-                "socket",
-                "temporarily unavailable",
-                "server error",
-                "502",
-                "503",
-                "504",
-            ]
+            pattern in lower
+            for pattern in network_patterns
         ):
 
             raise NetworkError(
                 f"{provider}: Lỗi mạng/server: "
-                f"{error_text}"
-            )
+                f"{text}"
+            ) from exc
 
         # ----------------------------------------------------
         # Unknown
         # ----------------------------------------------------
 
         raise NetworkError(
-            f"{provider}: {error_text}"
-        )
+            f"{provider}: {text}"
+        ) from exc
