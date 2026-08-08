@@ -1,32 +1,97 @@
 """
 ============================================================
 XỬ LÝ DỮ LIỆU & LOGIC SINH ĐỀ KIỂM TRA (DATA LAYER)
-Kiến trúc AI Đa Tác Tử (Agentic Pipeline / Sequential Generation)
+Kiến trúc: Agentic Workflow & Strict Python Validation
 ============================================================
 """
 
+import re
+import math
 import streamlit as st
 from loguru import logger
 from utils.document_reader import extract_text_from_file
 from exports.word_export_engine import WordExportEngine
 
-def calculate_cognitive_points(md: dict) -> dict:
-    """Chuyển đổi % mức độ nhận thức thành Điểm thực tế trên thang 10."""
+# ==========================================
+# 1. BỘ CÔNG CỤ TIỀN XỬ LÝ (PRE-PROCESSING)
+# ==========================================
+def calculate_absolute_points(config: dict) -> dict:
+    """Chuyển đổi % mức độ nhận thức thành điểm số tuyệt đối, tránh để AI tự làm toán."""
+    md = config.get('muc_do', {})
     return {
-        "nb_pt": (md.get('nb', 40) / 100) * 10,
-        "th_pt": (md.get('th', 30) / 100) * 10,
-        "vd_pt": (md.get('vd', 20) / 100) * 10,
-        "vdc_pt": (md.get('vdc', 10) / 100) * 10
+        "nb": (md.get('nb', 40) / 100) * 10.0,
+        "th": (md.get('th', 30) / 100) * 10.0,
+        "vd": (md.get('vd', 20) / 100) * 10.0,
+        "vdc": (md.get('vdc', 10) / 100) * 10.0
     }
 
+def build_matrix_rules(config: dict, pts: dict) -> str:
+    """Đặc tả thuật toán xây dựng ma trận vô cùng chặt chẽ."""
+    tn = config.get('tn', {})
+    tl = config.get('tl', {})
+    
+    rules = f"""
+[LUẬT XÂY DỰNG MA TRẬN & BẢN ĐẶC TẢ]
+1. CẤU TRÚC CỘT MA TRẬN BẮT BUỘC: 
+   | Chủ đề/Nội dung | Nhận biết | Thông hiểu | Vận dụng | Vận dụng cao | Tổng số câu | Tổng điểm |
+   (Lưu ý: Các cột mức độ phải chia rõ TN và TL nếu có).
+
+2. RÀNG BUỘC ĐIỂM SỐ TỔNG (TOÁN HỌC TUYỆT ĐỐI):
+   - Mức độ Nhận biết: BẮT BUỘC ĐÚNG {pts['nb']:.2f} điểm.
+   - Mức độ Thông hiểu: BẮT BUỘC ĐÚNG {pts['th']:.2f} điểm.
+   - Mức độ Vận dụng: BẮT BUỘC ĐÚNG {pts['vd']:.2f} điểm.
+   - Mức độ Vận dụng cao: BẮT BUỘC ĐÚNG {pts['vdc']:.2f} điểm.
+   - TỔNG ĐIỂM TOÀN BÀI: PHẢI CHÍNH XÁC 10.0 ĐIỂM.
+
+3. RÀNG BUỘC SỐ LƯỢNG CÂU HỎI TỔNG:
+   - Trắc nghiệm Nhiều lựa chọn ({tn.get('p_nlc')}đ/câu): BẮT BUỘC {tn.get('n_nlc')} câu.
+   - Trắc nghiệm Đúng/Sai ({tn.get('p_ds')}đ/câu): BẮT BUỘC {tn.get('n_ds')} câu.
+   - Trắc nghiệm Trả lời ngắn ({tn.get('p_ngan')}đ/câu): BẮT BUỘC {tn.get('n_ngan')} câu.
+   - Tự luận: BẮT BUỘC {tl.get('so_cau')} câu (Gồm các thang điểm: {', '.join(map(str, tl.get('diem_chi_tiet', [])))}).
+
+4. QUY TẮC ĐỐI CHIẾU: Bản Đặc tả phải ánh xạ 1-1 với Ma trận. Số lượng câu trong Đặc tả không được lệch dù chỉ 1 câu so với Ma trận.
+"""
+    return rules
+
+# ==========================================
+# 2. BỘ KIỂM ĐỊNH (PYTHON VALIDATORS)
+# ==========================================
+class ExamValidator:
+    @staticmethod
+    def validate_exam_questions_count(exam_text: str, config: dict) -> tuple[bool, list]:
+        """Dùng Regex để đếm số câu hỏi thực tế AI sinh ra so với cấu hình."""
+        errors = []
+        
+        # Đếm câu Trắc nghiệm Nhiều lựa chọn (Tìm các mẫu "Câu 1:", "Câu 2." trong phần trắc nghiệm)
+        # Giả định câu hỏi bắt đầu bằng "Câu X"
+        câu_matches = re.findall(r'(?i)\*\*Câu\s+\d+[:\.\*\*]', exam_text)
+        total_questions_generated = len(câu_matches)
+        
+        tn = config.get('tn', {})
+        tl = config.get('tl', {})
+        expected_total = tn.get('n_nlc', 0) + tn.get('n_ds', 0) + tn.get('n_ngan', 0) + tn.get('n_dk', 0) + tl.get('so_cau', 0)
+        
+        # Regex đếm số lượng đáp án A, B, C, D để ước lượng
+        options_a = len(re.findall(r'(?i)[A-D]\.', exam_text))
+        
+        if total_questions_generated < (expected_total * 0.8): # Dung sai 20% do AI định dạng "Câu" khác nhau
+            errors.append(f"Cảnh báo: Đếm được {total_questions_generated} mỏ neo 'Câu X', nhưng cấu hình yêu cầu {expected_total} câu.")
+            
+        return len(errors) == 0, errors
+
+# ==========================================
+# 3. TRÌNH ĐIỀU PHỐI ĐA TÁC TỬ (PIPELINE)
+# ==========================================
+def reset_output():
+    if "latest_exam_md" in st.session_state:
+        del st.session_state["latest_exam_md"]
+
 def process_request(config: dict, mode: str, uploaded_files: list):
-    """
-    Luồng tiền xử lý và điều phối các tác vụ AI (Agentic Workflow).
-    """
-    # 1. ĐỌC TÀI LIỆU (TÀNG KINH CÁC)
+    """Luồng Pipeline sinh Đề có kiểm định."""
+    
     text_context = ""
     if uploaded_files:
-        with st.spinner(f"Đang tổng hợp {len(uploaded_files)} tài liệu đính kèm..."):
+        with st.spinner(f"Đang phân tích {len(uploaded_files)} tài liệu nền tảng..."):
             for file in uploaded_files:
                 extracted = extract_text_from_file(file)
                 if "[LỖI" in extracted:
@@ -34,113 +99,120 @@ def process_request(config: dict, mode: str, uploaded_files: list):
                     return
                 text_context += f"\n\n--- TÀI LIỆU: {file.name} ---\n{extracted}\n"
     else:
-        text_context = "Bám sát CT GDPT 2018."
+        text_context = "Sử dụng kiến thức chuẩn CT GDPT 2018."
 
-    # 2. KIỂM TRA ENGINE
     engine = st.session_state.get("ai_engine")
     if not engine or not engine.is_ready():
         st.error("⚠️ Lỗi Xác Thực AI: Vui lòng cấu hình API Key ở Sidebar.")
         return
 
-    # 3. QUY ĐỔI TOÁN HỌC CHO AI
-    if mode != "chi_ma_tran":
-        tn = config.get('tn', {})
-        tl = config.get('tl', {})
-        pts = calculate_cognitive_points(config.get('muc_do', {}))
-        
-        # Bảng chỉ thị Toán học ép AI không được tự tính sai
-        math_prompt = f"""
-CẤU TRÚC ĐỀ (TỔNG 10.0 ĐIỂM):
-- Phân bổ điểm yêu cầu: Nhận biết ({pts['nb_pt']} đ), Thông hiểu ({pts['th_pt']} đ), Vận dụng ({pts['vd_pt']} đ), Vận dụng cao ({pts['vdc_pt']} đ).
-- Trắc nghiệm ({tn.get('total')} đ): NLC ({tn.get('n_nlc')} câu x {tn.get('p_nlc')}đ), Đ/S ({tn.get('n_ds')} câu x {tn.get('p_ds')}đ), Điền khuyết ({tn.get('n_dk')} câu x {tn.get('p_dk')}đ), TL ngắn ({tn.get('n_ngan')} câu x {tn.get('p_ngan')}đ).
-- Tự luận ({tl.get('total')} đ): {tl.get('so_cau')} câu (Các điểm: {', '.join(map(str, tl.get('diem_chi_tiet', [])))}).
-"""
-    
-    # ==========================================
-    # KHỞI CHẠY LUỒNG ĐA TÁC TỬ (MULTI-STEP GENERATION)
-    # ==========================================
+    pts = calculate_absolute_points(config)
+    matrix_rules = build_matrix_rules(config, pts)
+
     final_md_output = ""
     total_latency = 0.0
     total_tokens_used = 0
 
     try:
-        with st.status("🚀 BỘ NÃO AI ĐANG HOẠT ĐỘNG (LUỒNG ĐA BƯỚC)...", expanded=True) as status:
+        with st.status("🚀 KHỞI ĐỘNG LUỒNG KIỂM ĐỊNH ĐA TÁC TỬ...", expanded=True) as status:
             
-            # --- LUỒNG 4: CHỈ ĐỌC ĐỀ SINH MA TRẬN (SINGLE SHOT) ---
-            if mode == "chi_ma_tran":
-                st.write("Đang phân tích Đề và sinh Bảng Ma trận...")
-                sys_inst = "Bạn là chuyên gia thẩm định đề. Trả về Markdown Bảng Ma Trận và Bảng Đặc Tả, không kèm lời giải thích."
-                prompt_matrix = f"Dựa vào Đề kiểm tra sau, hãy lập Bảng Ma trận và Bảng Đặc tả:\n{text_context}"
-                res = engine.generate_text(prompt=prompt_matrix, system_instruction=sys_inst)
-                final_md_output = f"# I. MA TRẬN ĐỀ KIỂM TRA\n\n{res.text}"
-                total_latency, total_tokens_used = res.latency, res.total_tokens
-
-            # --- LUỒNG 3: CHỈ SINH ĐỀ & ĐÁP ÁN (2 BƯỚC) ---
-            elif mode == "tuy_chon_khong_ma_tran":
-                st.write("⏳ Bước 1/2: Đang sinh Đề kiểm tra...")
-                sys_inst = "Chuyên gia ra đề. Không sinh đáp án ở bước này. Trả về Markdown."
-                prompt_exam = f"Chủ đề: {config['chu_de']}\n{math_prompt}\nDữ liệu: {text_context}\nHãy soạn DUY NHẤT phần nội dung ĐỀ KIỂM TRA."
-                res1 = engine.generate_text(prompt=prompt_exam, system_instruction=sys_inst)
-                exam_text = res1.text
+            # ---------------------------------------------------------
+            # BƯỚC 1: SINH MA TRẬN & ĐẶC TẢ (NẾU CẦN)
+            # ---------------------------------------------------------
+            matrix_text = ""
+            if mode != "tuy_chon_khong_ma_tran":
+                st.write("⚙️ Tác tử 1: Đang thiết kế và toán học hóa Ma trận...")
+                sys_inst_1 = "Bạn là Chuyên gia thiết kế Ma trận. CHỈ TRẢ VỀ Bảng Markdown. TUYỆT ĐỐI KHÔNG giải thích. Bảng phải có cột Tổng điểm."
                 
-                st.write("⏳ Bước 2/2: Đang sinh Đáp án và Hướng dẫn chấm...")
-                sys_inst = "Chuyên gia chấm thi. Không giải thích lảm nhảm. Trả về Markdown."
-                prompt_key = f"Dựa vào ĐỀ KIỂM TRA TÔI VỪA SOẠN DƯỚI ĐÂY, hãy lập BẢNG ĐÁP ÁN (Trắc nghiệm) và HƯỚNG DẪN CHẤM (Tự luận chi tiết 0.25đ):\n\n{exam_text}"
-                res2 = engine.generate_text(prompt=prompt_key, system_instruction=sys_inst)
+                if mode == "chi_ma_tran":
+                    prompt_1 = f"ĐỀ KIỂM TRA:\n{text_context}\n\nNHIỆM VỤ: Lập BẢNG MA TRẬN và BẢN ĐẶC TẢ cho đề trên."
+                else:
+                    prompt_1 = f"CHỦ ĐỀ: {config['chu_de']}\n{matrix_rules}\nTÀI LIỆU: {text_context[:10000]}...\n\nNHIỆM VỤ: Lập BẢNG MA TRẬN và BẢN ĐẶC TẢ."
                 
-                final_md_output = f"# I. ĐỀ KIỂM TRA\n\n{exam_text}\n\n# II. ĐÁP ÁN & HƯỚNG DẪN CHẤM\n\n{res2.text}"
-                total_latency = res1.latency + res2.latency
-                total_tokens_used = res1.total_tokens + res2.total_tokens
-
-            # --- LUỒNG 1 & 2: FULL MA TRẬN + ĐỀ + ĐÁP ÁN (3 BƯỚC) ---
-            else:
-                st.write("⏳ Bước 1/3: Thiết kế Bảng Ma trận & Bản đặc tả...")
-                sys_inst = "Chuyên gia giáo dục. CHỈ SINH BẢNG MARKDOWN Ma trận và Đặc tả. Phân bổ câu hỏi khớp 100% với cấu trúc điểm yêu cầu."
-                prompt_matrix = f"Chủ đề: {config['chu_de']}\n{math_prompt}\nDữ liệu: {text_context}\nHãy lập BẢNG MA TRẬN ĐỀ KIỂM TRA và BẢNG ĐẶC TẢ."
-                res1 = engine.generate_text(prompt=prompt_matrix, system_instruction=sys_inst)
+                res1 = engine.generate_text(prompt=prompt_1, system_instruction=sys_inst_1)
                 matrix_text = res1.text
+                total_latency += res1.latency
+                total_tokens_used += res1.total_tokens
                 
-                st.write("⏳ Bước 2/3: Biên soạn Đề kiểm tra bám sát Ma trận...")
-                sys_inst = "Chuyên gia ra đề. TUYỆT ĐỐI BÁM SÁT MA TRẬN ĐỂ RA ĐỀ. Không sinh đáp án."
-                prompt_exam = f"Sử dụng Tài liệu: {text_context[:5000]}...\nDựa vào MA TRẬN BẠN VỪA LẬP DƯỚI ĐÂY, hãy soạn DUY NHẤT phần ĐỀ KIỂM TRA (Gồm TN và TL):\n\n{matrix_text}"
-                res2 = engine.generate_text(prompt=prompt_exam, system_instruction=sys_inst)
-                exam_text = res2.text
-                
-                st.write("⏳ Bước 3/3: Soạn Đáp án & Hướng dẫn chấm...")
-                sys_inst = "Chuyên gia chấm thi. Không giải thích lảm nhảm."
-                prompt_key = f"Dựa vào ĐỀ KIỂM TRA DƯỚI ĐÂY, hãy lập BẢNG ĐÁP ÁN (Trắc nghiệm) và HƯỚNG DẪN CHẤM (Tự luận chi tiết):\n\n{exam_text}"
-                res3 = engine.generate_text(prompt=prompt_key, system_instruction=sys_inst)
-                
-                final_md_output = f"# I. MA TRẬN VÀ BẢN ĐẶC TẢ\n\n{matrix_text}\n\n# II. ĐỀ KIỂM TRA\n\n{exam_text}\n\n# III. ĐÁP ÁN & HƯỚNG DẪN CHẤM\n\n{res3.text}"
-                total_latency = res1.latency + res2.latency + res3.latency
-                total_tokens_used = res1.total_tokens + res2.total_tokens + res3.total_tokens
+                # Validator: Kiểm tra cơ bản Ma trận có chứa "10" không
+                if "10" not in matrix_text and "10.0" not in matrix_text:
+                    st.toast("⚠️ Cảnh báo: Ma trận sinh ra dường như không cộng đủ 10 điểm. Vui lòng kiểm tra lại thủ công.", icon="⚠️")
 
-            status.update(label=f"✅ HOÀN TẤT LUỒNG XỬ LÝ (Tổng thời gian: {total_latency:.2f}s | Đã dùng: {total_tokens_used} tokens)", state="complete")
+                if mode == "chi_ma_tran":
+                    final_md_output = f"# I. MA TRẬN VÀ BẢN ĐẶC TẢ\n\n{matrix_text}"
+                    status.update(label=f"✅ Hoàn tất (Thời gian: {total_latency:.2f}s | {total_tokens_used} tokens)", state="complete")
+                    st.session_state["latest_exam_md"] = final_md_output
+                    return # Kết thúc sớm cho luồng 4
+
+            # ---------------------------------------------------------
+            # BƯỚC 2: SINH ĐỀ THI DỰA TRÊN MA TRẬN ĐÃ SINH
+            # ---------------------------------------------------------
+            st.write("⚙️ Tác tử 2: Đang biên soạn Đề thi bám sát Ma trận...")
+            sys_inst_2 = "Bạn là Chuyên gia ra đề. TUYỆT ĐỐI TUÂN THỦ số câu hỏi được giao. Sử dụng Unicode cho đơn vị, và bọc dấu $ cho công thức phức tạp."
+            
+            prompt_2 = f"""
+1. TÀI LIỆU NỀN TẢNG:\n{text_context[:8000]}...
+2. MA TRẬN YÊU CẦU ĐÁP ỨNG:\n{matrix_text if matrix_text else matrix_rules}
+3. CẤU TRÚC ĐIỂM SỐ: Trắc nghiệm ({config['tn'].get('total')}đ) - Tự luận ({config['tl'].get('total')}đ).
+
+NHIỆM VỤ: Soạn DUY NHẤT phần nội dung ĐỀ KIỂM TRA (Các câu hỏi). Bắt đầu mỗi câu bằng chữ "Câu X:". TUYỆT ĐỐI KHÔNG sinh đáp án ở bước này.
+"""
+            res2 = engine.generate_text(prompt=prompt_2, system_instruction=sys_inst_2)
+            exam_text = res2.text
+            total_latency += res2.latency
+            total_tokens_used += res2.total_tokens
+
+            # Python Validator đếm số câu hỏi
+            is_valid, errors = ExamValidator.validate_exam_questions_count(exam_text, config)
+            if not is_valid:
+                for err in errors:
+                    st.toast(err, icon="⚠️")
+
+            # ---------------------------------------------------------
+            # BƯỚC 3: SINH ĐÁP ÁN & HƯỚNG DẪN CHẤM
+            # ---------------------------------------------------------
+            st.write("⚙️ Tác tử 3: Đang xây dựng Đáp án & Hướng dẫn chấm (Kiểm định đối chiếu)...")
+            sys_inst_3 = "Chuyên gia chấm thi. Nhiệm vụ: Đọc kỹ Đề thi và lập Bảng đáp án, Hướng dẫn chấm chi tiết đến 0.25đ. Không giải thích lề mề."
+            
+            prompt_3 = f"Dựa vào ĐỀ KIỂM TRA TÔI VỪA SOẠN DƯỚI ĐÂY, hãy lập ĐÁP ÁN VÀ HƯỚNG DẪN CHẤM. Đảm bảo tổng điểm chấm tự luận bằng {config['tl'].get('total')} điểm.\n\nĐỀ KIỂM TRA:\n{exam_text}"
+            res3 = engine.generate_text(prompt=prompt_3, system_instruction=sys_inst_3)
+            total_latency += res3.latency
+            total_tokens_used += res3.total_tokens
+            
+            # ==========================================
+            # 4. ĐÓNG GÓI CHUNG (ASSEMBLY)
+            # ==========================================
+            if matrix_text:
+                final_md_output = f"# I. MA TRẬN VÀ BẢN ĐẶC TẢ\n\n{matrix_text}\n\n# II. ĐỀ KIỂM TRA\n\n{exam_text}\n\n# III. ĐÁP ÁN & HƯỚNG DẪN CHẤM\n\n{res3.text}"
+            else:
+                final_md_output = f"# I. ĐỀ KIỂM TRA\n\n{exam_text}\n\n# II. ĐÁP ÁN & HƯỚNG DẪN CHẤM\n\n{res3.text}"
+
+            status.update(label=f"✅ HOÀN TẤT LUỒNG ĐA TÁC TỬ (Tổng thời gian: {total_latency:.2f}s | Đã dùng: {total_tokens_used} tokens)", state="complete")
             st.session_state["latest_exam_md"] = final_md_output
 
     except Exception as e:
-        st.error(f"❌ Tiến trình bị đứt gãy: {str(e)}")
+        st.error(f"❌ Tiến trình bị đứt gãy tại Pipeline: {str(e)}")
         logger.error(f"Lỗi luồng sinh đề: {str(e)}")
         return
 
-    # HIỂN THỊ KẾT QUẢ VÀ NÚT TẢI
+    # HIỂN THỊ VÀ TẢI XUỐNG
     if "latest_exam_md" in st.session_state:
         md_text = st.session_state["latest_exam_md"]
         
-        with st.expander("👀 XEM TRƯỚC BẢN THẢO MARKDOWN", expanded=True):
+        with st.expander("👀 XEM TRƯỚC BẢN THẢO KIỂM ĐỊNH", expanded=True):
             st.markdown(md_text, unsafe_allow_html=True)
         
         st.divider()
-        with st.spinner("Đang render Engine Bảng và Công thức Word..."):
+        with st.spinner("Đang kết xuất tệp Word (Render Bảng & Công thức)..."):
             docx_bytes = WordExportEngine.convert_markdown_to_docx_bytes(md_text)
         
         col1, col2 = st.columns(2)
         with col1:
             st.download_button(
-                label="📥 TẢI XUỐNG BẢN CHÍNH THỨC FILE WORD (.DOCX)", data=docx_bytes,
+                label="📥 TẢI XUỐNG BẢN CHÍNH THỨC (.DOCX)", data=docx_bytes,
                 file_name=f"De_Kiem_Tra_Edu_AI.docx",
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                 type="primary", use_container_width=True
             )
         with col2:
-            st.button("🗑️ HỦY KẾT QUẢ / TẠO LẠI", on_click=lambda: st.session_state.pop("latest_exam_md", None), type="secondary", use_container_width=True)
+            st.button("🗑️ HỦY KẾT QUẢ / TẠO LẠI", on_click=reset_output, type="secondary", use_container_width=True)
