@@ -22,7 +22,7 @@ from google.genai.errors import APIError
 
 DEFAULT_TIMEOUT = 120
 DEFAULT_TEMP = 0.2
-DEFAULT_MAX_TOKENS = 8192
+DEFAULT_MAX_TOKENS = 3500
 DEFAULT_TOP_P = 0.95
 
 class AIEngineError(Exception): pass
