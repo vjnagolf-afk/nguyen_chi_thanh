@@ -1,6 +1,7 @@
 """
 ============================================================
 XỬ LÝ DỮ LIỆU & LOGIC SINH ĐỀ KIỂM TRA (DATA LAYER)
+Kiến trúc AI Đa Tác Tử (Agentic Pipeline / Sequential Generation)
 ============================================================
 """
 
@@ -9,133 +10,137 @@ from loguru import logger
 from utils.document_reader import extract_text_from_file
 from exports.word_export_engine import WordExportEngine
 
-def build_system_prompt(config: dict, mode: str, text_context: str) -> str:
-    prompt = f"""
-[CHỈ THỊ TỐI CAO DÀNH CHO AI]
-Bạn là Chuyên gia ra đề thi chuẩn Bộ GD&ĐT Việt Nam. BẠN PHẢI SINH ĐẦY ĐỦ NỘI DUNG TỪ ĐẦU ĐẾN CUỐI, TUYỆT ĐỐI KHÔNG ĐƯỢC DỪNG LẠI GIỮA CHỪNG.
-
-1. THÔNG TIN CHUNG:
-- Môn học: {config.get('mon_hoc', 'Không xác định')} | Lớp {config.get('lop', 'Không xác định')} | Thời lượng: {config.get('thoi_gian', '45 phút')}.
-
-2. KỶ LUẬT ĐỊNH DẠNG (BẮT BUỘC):
-- CHỐNG LỖI BẢNG (QUAN TRỌNG NHẤT): Bảng Markdown CHỈ ĐƯỢC PHÉP có DUY NHẤT 1 dòng kẻ ngang để phân cách tiêu đề (VD: `|---|---|`). NGHIÊM CẤM VIỆC TẠO RA CÁC DÒNG CHỈ CÓ DẤU GẠCH NGANG LIÊN TỤC. Bạn phải điền nội dung chữ thực tế vào bảng.
-- TOÁN HỌC/VẬT LÝ: Dùng `$công thức$` cho các biểu thức toán học. Không dùng dấu $ cho văn bản thường.
-- KHÔNG lặp lại nội dung. KHÔNG giải thích lảm nhảm.
-"""
-    
-    if text_context:
-        prompt += f"""
-3. TÀI LIỆU NỀN TẢNG (CHẾ ĐỘ CÓ ĐỀ CƯƠNG):
-- CHỈ ĐƯỢC PHÉP sử dụng kiến thức từ các văn bản sau. NGHIÊM CẤM bịa đặt kiến thức ngoài.
-- NỘI DUNG ĐỀ CƯƠNG TỔNG HỢP:\n{text_context[:15000]}...\n
-"""
-    else:
-        prompt += "\n3. TÀI LIỆU NỀN TẢNG: Bám sát CT GDPT 2018.\n"
-
-    if mode == "chi_ma_tran":
-        prompt += """
-[NHIỆM VỤ ĐẶC BIỆT]
-Dựa vào Đề kiểm tra ở trên, XÂY DỰNG NGƯỢC LẠI:
-# I. MA TRẬN ĐỀ KIỂM TRA (Bảng Markdown)
-# II. BẢN ĐẶC TẢ ĐỀ KIỂM TRA (Bảng Markdown)
-TUYỆT ĐỐI KHÔNG SINH LẠI ĐỀ HAY ĐÁP ÁN.
-"""
-        return prompt
-
-    tn = config.get('tn', {})
-    tl = config.get('tl', {})
-    md = config.get('muc_do', {})
-    
-    prompt += f"""
-4. CẤU TRÚC ĐIỂM SỐ (TỔNG 10.0):
-- Mức độ: Nhận biết ({md.get('nb', 40)}%) - Thông hiểu ({md.get('th', 30)}%) - Vận dụng ({md.get('vd', 20)}%) - Vận dụng cao ({md.get('vdc', 10)}%).
-- TRẮC NGHIỆM ({tn.get('total', 0)} điểm): {tn.get('n_nlc', 0)} câu NLC, {tn.get('n_ds', 0)} câu Đ/S, {tn.get('n_dk', 0)} câu Điền khuyết, {tn.get('n_ngan', 0)} câu TL ngắn.
-- TỰ LUẬN ({tl.get('total', 0)} điểm - Gồm {tl.get('so_cau', 0)} câu):
-"""
-    for i, p in enumerate(tl.get('diem_chi_tiet', [])):
-        prompt += f"   + Câu {i+1}: {p} điểm\n"
-
-    if mode in ["cv7991", "tuy_chon_co_ma_tran"]:
-        prompt += """
-5. TRÌNH TỰ TRẢ VỀ (BẮT BUỘC PHẢI CÓ ĐỦ 5 PHẦN, ĐÁNH DẤU BẰNG HEADING MARKDOWN #):
-# I. MA TRẬN ĐỀ KIỂM TRA
-(Chèn Bảng Ma Trận vào đây)
-
-# II. BẢN ĐẶC TẢ
-(Chèn Bảng Đặc Tả vào đây)
-
-# III. ĐỀ KIỂM TRA
-(Chèn Đề thi gồm Trắc nghiệm và Tự luận vào đây)
-
-# IV. ĐÁP ÁN
-(Chèn Đáp án Trắc nghiệm vào đây)
-
-# V. HƯỚNG DẪN CHẤM
-(Chèn Hướng dẫn chấm Tự luận vào đây)
-"""
-    elif mode == "tuy_chon_khong_ma_tran":
-        prompt += """
-5. TRÌNH TỰ TRẢ VỀ (BỎ QUA MA TRẬN VÀ ĐẶC TẢ):
-# I. ĐỀ KIỂM TRA
-# II. ĐÁP ÁN
-# III. HƯỚNG DẪN CHẤM
-"""
-    return prompt
-
-def reset_output():
-    if "latest_exam_md" in st.session_state:
-        del st.session_state["latest_exam_md"]
+def calculate_cognitive_points(md: dict) -> dict:
+    """Chuyển đổi % mức độ nhận thức thành Điểm thực tế trên thang 10."""
+    return {
+        "nb_pt": (md.get('nb', 40) / 100) * 10,
+        "th_pt": (md.get('th', 30) / 100) * 10,
+        "vd_pt": (md.get('vd', 20) / 100) * 10,
+        "vdc_pt": (md.get('vdc', 10) / 100) * 10
+    }
 
 def process_request(config: dict, mode: str, uploaded_files: list):
+    """
+    Luồng tiền xử lý và điều phối các tác vụ AI (Agentic Workflow).
+    """
+    # 1. ĐỌC TÀI LIỆU (TÀNG KINH CÁC)
     text_context = ""
-    
-    # HỖ TRỢ XỬ LÝ NHIỀU FILE CÙNG LÚC
     if uploaded_files:
-        with st.spinner(f"Đang đọc và phân tích {len(uploaded_files)} tài liệu đính kèm..."):
+        with st.spinner(f"Đang tổng hợp {len(uploaded_files)} tài liệu đính kèm..."):
             for file in uploaded_files:
                 extracted = extract_text_from_file(file)
                 if "[LỖI" in extracted:
                     st.error(f"Lỗi đọc file {file.name}: {extracted}")
                     return
-                text_context += f"\n\n--- BẮT ĐẦU TÀI LIỆU: {file.name} ---\n{extracted}\n--- KẾT THÚC TÀI LIỆU ---\n"
-            st.success(f"✅ Đã tổng hợp thành công {len(uploaded_files)} tài liệu!")
-    
-    system_prompt = build_system_prompt(config, mode, text_context)
+                text_context += f"\n\n--- TÀI LIỆU: {file.name} ---\n{extracted}\n"
+    else:
+        text_context = "Bám sát CT GDPT 2018."
+
+    # 2. KIỂM TRA ENGINE
     engine = st.session_state.get("ai_engine")
-    
     if not engine or not engine.is_ready():
         st.error("⚠️ Lỗi Xác Thực AI: Vui lòng cấu hình API Key ở Sidebar.")
         return
 
-    with st.spinner(f"Hệ thống AI ({engine.provider_type}) đang xây dựng 100% đề kiểm tra. Vui lòng đợi từ 30 - 60 giây..."):
-        try:
-            response = engine.generate_text(
-                prompt=system_prompt, 
-                system_instruction="Chỉ sinh nội dung. Không được tạo bảng rỗng, không được sinh ra dòng kẻ nét đứt liên tục. Đảm bảo sinh đề thi hoàn chỉnh."
-            )
-            st.session_state["latest_exam_md"] = response.text
-            st.success(f"✅ Nhiệm vụ hoàn tất! (Thời gian xử lý: {response.latency:.2f}s | Đã dùng: {response.total_tokens} tokens)")
-        except Exception as e:
-            st.error(f"❌ Tiến trình bị gián đoạn: {str(e)}")
-            return
+    # 3. QUY ĐỔI TOÁN HỌC CHO AI
+    if mode != "chi_ma_tran":
+        tn = config.get('tn', {})
+        tl = config.get('tl', {})
+        pts = calculate_cognitive_points(config.get('muc_do', {}))
+        
+        # Bảng chỉ thị Toán học ép AI không được tự tính sai
+        math_prompt = f"""
+CẤU TRÚC ĐỀ (TỔNG 10.0 ĐIỂM):
+- Phân bổ điểm yêu cầu: Nhận biết ({pts['nb_pt']} đ), Thông hiểu ({pts['th_pt']} đ), Vận dụng ({pts['vd_pt']} đ), Vận dụng cao ({pts['vdc_pt']} đ).
+- Trắc nghiệm ({tn.get('total')} đ): NLC ({tn.get('n_nlc')} câu x {tn.get('p_nlc')}đ), Đ/S ({tn.get('n_ds')} câu x {tn.get('p_ds')}đ), Điền khuyết ({tn.get('n_dk')} câu x {tn.get('p_dk')}đ), TL ngắn ({tn.get('n_ngan')} câu x {tn.get('p_ngan')}đ).
+- Tự luận ({tl.get('total')} đ): {tl.get('so_cau')} câu (Các điểm: {', '.join(map(str, tl.get('diem_chi_tiet', [])))}).
+"""
+    
+    # ==========================================
+    # KHỞI CHẠY LUỒNG ĐA TÁC TỬ (MULTI-STEP GENERATION)
+    # ==========================================
+    final_md_output = ""
+    total_latency = 0.0
+    total_tokens_used = 0
 
+    try:
+        with st.status("🚀 BỘ NÃO AI ĐANG HOẠT ĐỘNG (LUỒNG ĐA BƯỚC)...", expanded=True) as status:
+            
+            # --- LUỒNG 4: CHỈ ĐỌC ĐỀ SINH MA TRẬN (SINGLE SHOT) ---
+            if mode == "chi_ma_tran":
+                st.write("Đang phân tích Đề và sinh Bảng Ma trận...")
+                sys_inst = "Bạn là chuyên gia thẩm định đề. Trả về Markdown Bảng Ma Trận và Bảng Đặc Tả, không kèm lời giải thích."
+                prompt_matrix = f"Dựa vào Đề kiểm tra sau, hãy lập Bảng Ma trận và Bảng Đặc tả:\n{text_context}"
+                res = engine.generate_text(prompt=prompt_matrix, system_instruction=sys_inst)
+                final_md_output = f"# I. MA TRẬN ĐỀ KIỂM TRA\n\n{res.text}"
+                total_latency, total_tokens_used = res.latency, res.total_tokens
+
+            # --- LUỒNG 3: CHỈ SINH ĐỀ & ĐÁP ÁN (2 BƯỚC) ---
+            elif mode == "tuy_chon_khong_ma_tran":
+                st.write("⏳ Bước 1/2: Đang sinh Đề kiểm tra...")
+                sys_inst = "Chuyên gia ra đề. Không sinh đáp án ở bước này. Trả về Markdown."
+                prompt_exam = f"Chủ đề: {config['chu_de']}\n{math_prompt}\nDữ liệu: {text_context}\nHãy soạn DUY NHẤT phần nội dung ĐỀ KIỂM TRA."
+                res1 = engine.generate_text(prompt=prompt_exam, system_instruction=sys_inst)
+                exam_text = res1.text
+                
+                st.write("⏳ Bước 2/2: Đang sinh Đáp án và Hướng dẫn chấm...")
+                sys_inst = "Chuyên gia chấm thi. Không giải thích lảm nhảm. Trả về Markdown."
+                prompt_key = f"Dựa vào ĐỀ KIỂM TRA TÔI VỪA SOẠN DƯỚI ĐÂY, hãy lập BẢNG ĐÁP ÁN (Trắc nghiệm) và HƯỚNG DẪN CHẤM (Tự luận chi tiết 0.25đ):\n\n{exam_text}"
+                res2 = engine.generate_text(prompt=prompt_key, system_instruction=sys_inst)
+                
+                final_md_output = f"# I. ĐỀ KIỂM TRA\n\n{exam_text}\n\n# II. ĐÁP ÁN & HƯỚNG DẪN CHẤM\n\n{res2.text}"
+                total_latency = res1.latency + res2.latency
+                total_tokens_used = res1.total_tokens + res2.total_tokens
+
+            # --- LUỒNG 1 & 2: FULL MA TRẬN + ĐỀ + ĐÁP ÁN (3 BƯỚC) ---
+            else:
+                st.write("⏳ Bước 1/3: Thiết kế Bảng Ma trận & Bản đặc tả...")
+                sys_inst = "Chuyên gia giáo dục. CHỈ SINH BẢNG MARKDOWN Ma trận và Đặc tả. Phân bổ câu hỏi khớp 100% với cấu trúc điểm yêu cầu."
+                prompt_matrix = f"Chủ đề: {config['chu_de']}\n{math_prompt}\nDữ liệu: {text_context}\nHãy lập BẢNG MA TRẬN ĐỀ KIỂM TRA và BẢNG ĐẶC TẢ."
+                res1 = engine.generate_text(prompt=prompt_matrix, system_instruction=sys_inst)
+                matrix_text = res1.text
+                
+                st.write("⏳ Bước 2/3: Biên soạn Đề kiểm tra bám sát Ma trận...")
+                sys_inst = "Chuyên gia ra đề. TUYỆT ĐỐI BÁM SÁT MA TRẬN ĐỂ RA ĐỀ. Không sinh đáp án."
+                prompt_exam = f"Sử dụng Tài liệu: {text_context[:5000]}...\nDựa vào MA TRẬN BẠN VỪA LẬP DƯỚI ĐÂY, hãy soạn DUY NHẤT phần ĐỀ KIỂM TRA (Gồm TN và TL):\n\n{matrix_text}"
+                res2 = engine.generate_text(prompt=prompt_exam, system_instruction=sys_inst)
+                exam_text = res2.text
+                
+                st.write("⏳ Bước 3/3: Soạn Đáp án & Hướng dẫn chấm...")
+                sys_inst = "Chuyên gia chấm thi. Không giải thích lảm nhảm."
+                prompt_key = f"Dựa vào ĐỀ KIỂM TRA DƯỚI ĐÂY, hãy lập BẢNG ĐÁP ÁN (Trắc nghiệm) và HƯỚNG DẪN CHẤM (Tự luận chi tiết):\n\n{exam_text}"
+                res3 = engine.generate_text(prompt=prompt_key, system_instruction=sys_inst)
+                
+                final_md_output = f"# I. MA TRẬN VÀ BẢN ĐẶC TẢ\n\n{matrix_text}\n\n# II. ĐỀ KIỂM TRA\n\n{exam_text}\n\n# III. ĐÁP ÁN & HƯỚNG DẪN CHẤM\n\n{res3.text}"
+                total_latency = res1.latency + res2.latency + res3.latency
+                total_tokens_used = res1.total_tokens + res2.total_tokens + res3.total_tokens
+
+            status.update(label=f"✅ HOÀN TẤT LUỒNG XỬ LÝ (Tổng thời gian: {total_latency:.2f}s | Đã dùng: {total_tokens_used} tokens)", state="complete")
+            st.session_state["latest_exam_md"] = final_md_output
+
+    except Exception as e:
+        st.error(f"❌ Tiến trình bị đứt gãy: {str(e)}")
+        logger.error(f"Lỗi luồng sinh đề: {str(e)}")
+        return
+
+    # HIỂN THỊ KẾT QUẢ VÀ NÚT TẢI
     if "latest_exam_md" in st.session_state:
         md_text = st.session_state["latest_exam_md"]
         
-        with st.expander("👀 XEM TRƯỚC KẾT QUẢ", expanded=True):
+        with st.expander("👀 XEM TRƯỚC BẢN THẢO MARKDOWN", expanded=True):
             st.markdown(md_text, unsafe_allow_html=True)
         
         st.divider()
-        with st.spinner("Đang đóng gói file Word (.docx)..."):
+        with st.spinner("Đang render Engine Bảng và Công thức Word..."):
             docx_bytes = WordExportEngine.convert_markdown_to_docx_bytes(md_text)
         
         col1, col2 = st.columns(2)
         with col1:
             st.download_button(
-                label="📥 TẢI XUỐNG FILE WORD (.DOCX)", data=docx_bytes,
-                file_name=f"De_Kiem_Tra_{config.get('mon_hoc', 'Mon')}.docx".replace(" ", "_"),
+                label="📥 TẢI XUỐNG BẢN CHÍNH THỨC FILE WORD (.DOCX)", data=docx_bytes,
+                file_name=f"De_Kiem_Tra_Edu_AI.docx",
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                 type="primary", use_container_width=True
             )
         with col2:
-            st.button("🗑️ XÓA KẾT QUẢ ĐỂ TẠO ĐỀ MỚI", on_click=reset_output, type="secondary", use_container_width=True)
+            st.button("🗑️ HỦY KẾT QUẢ / TẠO LẠI", on_click=lambda: st.session_state.pop("latest_exam_md", None), type="secondary", use_container_width=True)
