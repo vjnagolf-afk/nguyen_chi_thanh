@@ -77,10 +77,8 @@ class AIEngine:
             res = self.generate_text(prompt="Ping.", system_instruction="Chỉ trả lời 'Pong'.")
             return bool(res and res.text)
         except (AuthenticationError, QuotaExceededError, NetworkError, TimeoutError, ModelNotFoundError) as e:
-            # Nhả các lỗi đã được phân loại chuẩn từ hàm generate_text lên trên
             raise e
         except Exception as e:
-            # Nếu có lỗi lạ chưa được phân loại, gán mác NetworkError thay vì AuthenticationError
             raise NetworkError(f"Lỗi hệ thống hoặc đường truyền: {str(e)}")
 
     def generate_with_fallback(self, prompt: str, system_instruction: str = "") -> AIResponse:
@@ -172,12 +170,12 @@ class AIEngine:
 
     def _call_openrouter(self, prompt: str, system_instruction: str) -> AIResponse:
         try:
-            # Bỏ định dạng Markdown URL bị lỗi, dùng trực tiếp chuỗi URL gốc
             client = OpenAI(
                 base_url="[https://openrouter.ai/api/v1](https://openrouter.ai/api/v1)",
                 api_key=self.api_key,
                 timeout=self.timeout
             )
+
             res = client.chat.completions.create(
                 model=self.model_name,
                 messages=self._build_messages(system_instruction, prompt),
@@ -188,21 +186,35 @@ class AIEngine:
                     "X-Title": "AI Exam Generator"
                 }
             )
+
             usage = res.usage
+
             return AIResponse(
-                text=res.choices[0].message.content, 
-                provider="OpenRouter", 
-                model=self.model_name, 
-                latency=0.0, 
-                prompt_tokens=usage.prompt_tokens if usage else 0, 
-                completion_tokens=usage.completion_tokens if usage else 0, 
+                text=res.choices[0].message.content,
+                provider="OpenRouter",
+                model=self.model_name,
+                latency=0.0,
+                prompt_tokens=usage.prompt_tokens if usage else 0,
+                completion_tokens=usage.completion_tokens if usage else 0,
                 total_tokens=usage.total_tokens if usage else 0
             )
+
         except Exception as e:
             err_msg = str(e)
-            if "401" in err_msg: raise AuthenticationError("Sai API Key OpenRouter.")
-            if "402" in err_msg or "429" in err_msg or "credits" in err_msg.lower(): raise QuotaExceededError("Hết Credits hoặc máy chủ OpenRouter quá tải.")
-            if "timeout" in err_msg.lower(): raise TimeoutError("Hết thời gian chờ (Timeout) khi gọi OpenRouter.")
+
+            if "401" in err_msg:
+                raise AuthenticationError("Sai API Key OpenRouter.")
+
+            if "402" in err_msg or "429" in err_msg or "credits" in err_msg.lower():
+                raise QuotaExceededError(
+                    "Hết Credits hoặc máy chủ OpenRouter quá tải."
+                )
+
+            if "timeout" in err_msg.lower():
+                raise TimeoutError(
+                    "Hết thời gian chờ (Timeout) khi gọi OpenRouter."
+                )
+
             raise NetworkError(f"OpenRouter Error: {err_msg}")
 
     def _call_ollama(self, prompt: str, system_instruction: str) -> AIResponse:
