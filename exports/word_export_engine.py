@@ -1,7 +1,6 @@
 """
 ============================================================
 XUẤT BẢN WORD - BỘ ĐIỀU PHỐI TRUNG TÂM (WORD EXPORT ENGINE)
-Hỗ trợ Render Bảng (Tables), Markdown, và bảo toàn LaTeX.
 ============================================================
 """
 
@@ -16,8 +15,7 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 class WordExportEngine:
     @staticmethod
     def _parse_inline_text(paragraph, text: str):
-        """Hàm xử lý bôi đậm, in nghiêng và giữ nguyên LaTeX ($) trong từng đoạn hoặc ô bảng."""
-        # Tách chuỗi dựa trên ký hiệu in đậm (**) và LaTeX ($$, $)
+        # Tách chuỗi. Tự động cắt bỏ các dấu $ để file Word đọc trơn tru như đánh máy.
         tokens = re.split(r'(\*\*.*?\*\*|\$\$.*?\$\$|\$.*?\$)', text)
         for token in tokens:
             if not token:
@@ -26,10 +24,10 @@ class WordExportEngine:
                 run = paragraph.add_run(token[2:-2])
                 run.bold = True
             elif token.startswith('$$') and token.endswith('$$'):
-                run = paragraph.add_run(token)
+                run = paragraph.add_run(token[2:-2]) # Cắt bỏ dấu $$
                 run.italic = True
             elif token.startswith('$') and token.endswith('$'):
-                run = paragraph.add_run(token)
+                run = paragraph.add_run(token[1:-1]) # Cắt bỏ dấu $
                 run.italic = True
             else:
                 paragraph.add_run(token)
@@ -42,7 +40,6 @@ class WordExportEngine:
             else:
                 doc = Document()
             
-            # Căn lề chuẩn
             for section in doc.sections:
                 section.top_margin = Cm(1.5)
                 section.bottom_margin = Cm(1.5)
@@ -57,42 +54,40 @@ class WordExportEngine:
                 markdown_text = "Không có nội dung xuất bản."
 
             lines = str(markdown_text).split('\n')
-            
             in_table = False
             table_data = []
 
             def render_buffered_table():
-                """Vẽ bảng từ mảng dữ liệu table_data đã thu thập"""
                 if not table_data: return
                 
-                # Bỏ qua dòng phân cách của Markdown (VD: |---|---|)
-                valid_rows = [row for row in table_data if not re.match(r'^[\s\|:.-]+$', row)]
+                # Bỏ qua các dòng phân cách của Markdown
+                valid_rows = [row for row in table_data if not re.match(r'^[\s\|:\.-]+$', row)]
                 if not valid_rows: return
                 
-                # Tính số cột dựa trên dòng đầu tiên
-                num_cols = len([c for c in valid_rows[0].strip().strip('|').split('|')])
+                # Cân bằng số cột: Tránh lỗi bảng rỗng do Markdown bị gãy dòng
+                num_cols = max(len([c for c in row.strip().strip('|').split('|')]) for row in valid_rows)
+                if num_cols == 0: return
+
                 table = doc.add_table(rows=len(valid_rows), cols=num_cols)
                 table.style = 'Table Grid'
                 
                 for i, row_str in enumerate(valid_rows):
                     cells = [c.strip() for c in row_str.strip().strip('|').split('|')]
-                    for j, cell_text in enumerate(cells):
-                        if j < num_cols:
-                            cell = table.cell(i, j)
-                            cell.text = "" # Xóa nội dung mặc định
-                            p = cell.paragraphs[0]
-                            WordExportEngine._parse_inline_text(p, cell_text)
+                    for j in range(num_cols):
+                        cell_text = cells[j] if j < len(cells) else ""
+                        cell = table.cell(i, j)
+                        cell.text = "" 
+                        p = cell.paragraphs[0]
+                        WordExportEngine._parse_inline_text(p, cell_text)
             
             for line in lines:
                 line_clean = line.strip()
                 
-                # Phát hiện Bảng Markdown (bắt đầu và kết thúc bằng |)
                 if line_clean.startswith('|') and line_clean.endswith('|'):
                     in_table = True
                     table_data.append(line_clean)
                     continue
                 else:
-                    # Nếu đang ở trong bảng mà gặp dòng chữ thường -> Kết thúc bảng, vẽ bảng ra
                     if in_table:
                         render_buffered_table()
                         in_table = False
@@ -101,7 +96,6 @@ class WordExportEngine:
                 if not line_clean:
                     continue
                 
-                # Xử lý Tiêu đề (Headings)
                 if line_clean.startswith('#'):
                     level = len(line_clean) - len(line_clean.lstrip('#'))
                     text = line_clean.lstrip('#').strip()
@@ -114,7 +108,6 @@ class WordExportEngine:
                         run.font.size = Pt(16) if level == 1 else Pt(14)
                     continue
 
-                # Xử lý đoạn văn bình thường (Paragraphs & Lists)
                 p = doc.add_paragraph()
                 p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
                 
@@ -128,7 +121,6 @@ class WordExportEngine:
                     
                 WordExportEngine._parse_inline_text(p, line_clean)
 
-            # Vẽ bảng cuối cùng nếu file kết thúc bằng một bảng
             if in_table:
                 render_buffered_table()
 
