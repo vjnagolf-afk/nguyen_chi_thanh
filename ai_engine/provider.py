@@ -178,7 +178,7 @@ class AIEngine:
 
     def _call_ollama(self, prompt: str, system_instruction: str) -> AIResponse:
         url = "http://localhost:11434/api/generate"
-        payload = {"model": self.model_name, "prompt": f"{system_instruction}\n\n{prompt}" if system_instruction else prompt, "stream": False}
+        payload = {"model": self.model_name, "prompt": f"{system_instruction}\\n\\n{prompt}" if system_instruction else prompt, "stream": False}
         res = self.session.post(url, json=payload, timeout=self.timeout)
         res.raise_for_status()
         data = res.json()
