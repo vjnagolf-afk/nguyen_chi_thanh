@@ -15,7 +15,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_excep
 from cachetools import TTLCache
 
 # ==========================================
-# CÁC SDK CHÍNH THỨC (ĐÃ THANH LỌC)
+# CÁC SDK CHÍNH THỨC
 # ==========================================
 from openai import OpenAI
 import anthropic
@@ -28,7 +28,7 @@ from google.genai.errors import APIError
 # ==========================================
 DEFAULT_TIMEOUT = 120
 DEFAULT_TEMP = 0.2
-DEFAULT_MAX_TOKENS = 8192
+DEFAULT_MAX_TOKENS = 8192  # Cố định giới hạn token đầu ra để tránh lỗi tín dụng (Credits)
 DEFAULT_TOP_P = 0.95
 
 # ==========================================
@@ -83,7 +83,6 @@ class AIEngine:
         self.timeout = timeout
         self.session = requests.Session()
         
-        # BỔ SUNG CƠ CHẾ TRẠNG THÁI (ĐÃ FIX LỖI)
         self._is_ready = False
         if self.api_key or self.provider_type == "Ollama":
             self._is_ready = True
@@ -204,7 +203,6 @@ class AIEngine:
     # ==========================================
     
     def _call_gemini_sdk(self, prompt: str, system_instruction: str) -> AIResponse:
-        """Sử dụng thuần túy SDK google-genai mới"""
         try:
             client = genai.Client(api_key=self.api_key)
             config = types.GenerateContentConfig(
@@ -310,7 +308,8 @@ class AIEngine:
         payload = {
             "model": self.model_name,
             "messages": self._build_messages(system_instruction, prompt),
-            "temperature": DEFAULT_TEMP
+            "temperature": DEFAULT_TEMP,
+            "max_tokens": DEFAULT_MAX_TOKENS  # VÁ LỖI TẠI ĐÂY: Khóa cứng giới hạn token trả về
         }
         
         res = self.session.post(url, headers=headers, json=payload, timeout=self.timeout)
@@ -323,6 +322,7 @@ class AIEngine:
         if "error" in data:
             err_msg = data["error"].get("message", "Lỗi không xác định")
             if "auth" in err_msg.lower(): raise AuthenticationError(err_msg)
+            if "credits" in err_msg.lower(): raise QuotaExceededError(err_msg)
             raise AIEngineError(f"OpenRouter Error: {err_msg}")
             
         usage = data.get("usage", {})
