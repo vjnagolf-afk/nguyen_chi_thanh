@@ -1,7 +1,7 @@
 """
 ============================================================
 XUẤT BẢN WORD - BỘ ĐIỀU PHỐI TRUNG TÂM (WORD EXPORT ENGINE)
-Bộ chuyển đổi Markdown thuần túy (Preserve Math/LaTeX).
+Bộ chuyển đổi Markdown thuần túy (Bảo toàn hoàn hảo LaTeX).
 ============================================================
 """
 
@@ -16,8 +16,7 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 class WordExportEngine:
     @staticmethod
     def _parse_inline_text(paragraph, text: str):
-        """Xử lý in đậm/nghiêng bằng markdown (** / *). TUYỆT ĐỐI BẢO TOÀN dấu $ cho công thức Word."""
-        # Regex tìm **bold**, *italic*. Không chạm vào $
+        # KHÔNG DÙNG REGEX ĐỂ CHẠM VÀO DẤU $. Bảo toàn tuyệt đối cho MS Word.
         tokens = re.split(r'(\*\*.*?\*\*|\*.*?\*)', text)
         for token in tokens:
             if not token: continue
@@ -73,7 +72,7 @@ class WordExportEngine:
             for line in lines:
                 line_clean = line.strip()
                 
-                # BẮT BẢNG MARKDOWN CHUẨN
+                # TABLE DETECTION
                 if line_clean.startswith('|') and line_clean.endswith('|'):
                     in_table = True
                     table_data.append(line_clean)
@@ -98,7 +97,7 @@ class WordExportEngine:
                         run.font.size = Pt(16) if level == 1 else Pt(14)
                     continue
 
-                # PARAGRAPH & LIST
+                # PARAGRAPH
                 p = doc.add_paragraph()
                 p.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
                 
@@ -119,5 +118,5 @@ class WordExportEngine:
             return f.getvalue()
             
         except Exception as e:
-            logger.error(f"Lỗi xuất bản file Word: {str(e)}")
+            logger.error(f"Lỗi xuất bản Word: {str(e)}")
             return b""
