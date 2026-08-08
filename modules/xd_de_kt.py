@@ -7,8 +7,6 @@ import streamlit as st
 from modules import xd_de_kt_data
 
 def render_exam_config(tab_key: str, mode: str):
-    """Hàm vẽ giao diện cấu hình chung để tái sử dụng cho các Tab"""
-    
     st.markdown("### 1. Thông Tin Cơ Bản")
     col1, col2, col3, col4 = st.columns(4)
     
@@ -24,13 +22,12 @@ def render_exam_config(tab_key: str, mode: str):
     chu_de = st.text_input("Nhập tên Chủ đề / Nội dung bài kiểm tra:", placeholder="VD: Quang hợp ở thực vật, Lực và Chuyển động...", key=f"{tab_key}_chude")
 
     if mode == "chi_ma_tran":
-        st.markdown("### 2. Tải Lên Đề Kiểm Tra Có Sẵn")
-        st.info("Hệ thống sẽ đọc đề kiểm tra này và tự động xây dựng Ma trận & Bản đặc tả tương ứng.")
+        st.markdown("### 2. Tải Lên Đề Kiểm Tra Có Sẵn (BẮT BUỘC)")
         file_upload = st.file_uploader("Tải file Đề kiểm tra (Word, PDF, TXT):", key=f"{tab_key}_file")
         
         if st.button("🚀 PHÂN TÍCH & SINH MA TRẬN", type="primary", key=f"{tab_key}_btn"):
             if not file_upload:
-                st.error("Vui lòng tải đề kiểm tra lên trước!")
+                st.error("❌ BẮT BUỘC PHẢI TẢI LÊN ĐỀ KIỂM TRA trước khi thực hiện!")
             else:
                 config = {"mon_hoc": mon_hoc, "lop": lop, "thoi_gian": thoi_gian, "loai_de": loai_de, "chu_de": chu_de}
                 xd_de_kt_data.process_request(config, mode, file_upload)
@@ -84,12 +81,20 @@ def render_exam_config(tab_key: str, mode: str):
     if sum_muc_do != 100:
         st.error(f"❌ Tổng tỷ lệ đang là {sum_muc_do}%. Vui lòng điều chỉnh lại cho đúng 100%.")
 
-    st.markdown("### 5. Đính Kèm Đề Cương / Sách Giáo Khoa (Tùy chọn)")
-    file_upload = st.file_uploader("Tải file tài liệu để AI bám sát (Word, PDF, Text):", key=f"{tab_key}_file_ref")
+    # BẮT BUỘC TẢI ĐỀ CƯƠNG CHO TAB 1 & 2
+    if mode in ["cv7991", "tuy_chon_co_ma_tran"]:
+        st.markdown("### 5. Đính Kèm Đề Cương / Nội Dung (BẮT BUỘC)")
+        file_upload = st.file_uploader("Tải file tài liệu để AI bám sát (Word, PDF, Text):", key=f"{tab_key}_file_ref")
+    else:
+        st.markdown("### 5. Đính Kèm Đề Cương / Sách Giáo Khoa (Tùy chọn)")
+        file_upload = st.file_uploader("Tải file tài liệu (Tùy chọn):", key=f"{tab_key}_file_ref")
 
     st.divider()
     if st.button("🚀 TIẾN HÀNH XÂY DỰNG ĐỀ", type="primary", use_container_width=True, key=f"{tab_key}_btn_submit"):
-        if sum_tl != total_tl_expected:
+        # CHỐT CHẶN BẮT BUỘC TẢI ĐỀ CƯƠNG
+        if mode in ["cv7991", "tuy_chon_co_ma_tran"] and not file_upload:
+            st.error("❌ CHỨC NĂNG NÀY BẮT BUỘC PHẢI TẢI LÊN ĐỀ CƯƠNG HOẶC TÀI LIỆU ÔN TẬP!")
+        elif sum_tl != total_tl_expected:
             st.warning("Vui lòng sửa lại điểm các câu Tự luận cho khớp tổng điểm!")
         elif sum_muc_do != 100:
             st.warning("Vui lòng sửa lại Tỷ lệ mức độ cho đủ 100%!")
@@ -102,17 +107,9 @@ def render_exam_config(tab_key: str, mode: str):
             }
             xd_de_kt_data.process_request(config, mode, file_upload)
 
-
 def render_ui():
     st.title("📝 HỆ THỐNG XÂY DỰNG ĐỀ KIỂM TRA CHUYÊN SÂU")
-    
-    tab1, tab2, tab3, tab4 = st.tabs([
-        "📖 Đề CV 7991 (Có Ma trận)", 
-        "🛠️ Đề Tự do (Có Ma trận)", 
-        "⚡ Đề Tự do (Chỉ ra đề)", 
-        "🔍 Đọc Đề -> Sinh Ma trận"
-    ])
-    
+    tab1, tab2, tab3, tab4 = st.tabs(["📖 Đề CV 7991 (Có Ma trận)", "🛠️ Đề Tự do (Có Ma trận)", "⚡ Đề Tự do (Chỉ ra đề)", "🔍 Đọc Đề -> Sinh Ma trận"])
     with tab1: render_exam_config("tab1", "cv7991")
     with tab2: render_exam_config("tab2", "tuy_chon_co_ma_tran")
     with tab3: render_exam_config("tab3", "tuy_chon_khong_ma_tran")
