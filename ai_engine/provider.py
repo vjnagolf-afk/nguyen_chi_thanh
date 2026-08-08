@@ -51,6 +51,7 @@ class AIEngine:
         self.api_key = api_key.strip()
         self.model_name = model_name.strip()
         self.timeout = timeout
+        self.session = requests.Session()
         
         self._is_ready = bool(self.api_key or self.provider_type == "Ollama")
         self._validate_provider()
@@ -71,11 +72,16 @@ class AIEngine:
         return messages
 
     def test_connection(self) -> bool:
+        """Kiểm tra kết nối và trả về đúng loại Exception để Sidebar hiển thị."""
         try:
             res = self.generate_text(prompt="Ping.", system_instruction="Chỉ trả lời 'Pong'.")
             return bool(res and res.text)
+        except (AuthenticationError, QuotaExceededError, NetworkError, TimeoutError, ModelNotFoundError) as e:
+            # Nhả các lỗi đã được phân loại chuẩn từ hàm generate_text lên trên
+            raise e
         except Exception as e:
-            raise AuthenticationError(f"Kiểm tra kết nối thất bại: {str(e)}")
+            # Nếu có lỗi lạ chưa được phân loại, gán mác NetworkError thay vì AuthenticationError
+            raise NetworkError(f"Lỗi hệ thống hoặc đường truyền: {str(e)}")
 
     def generate_with_fallback(self, prompt: str, system_instruction: str = "") -> AIResponse:
         fallbacks = []
@@ -152,6 +158,7 @@ class AIEngine:
             err_msg = str(e)
             if "401" in err_msg: raise AuthenticationError("Sai API Key OpenAI.")
             if "429" in err_msg: raise QuotaExceededError("Hết Quota OpenAI.")
+            if "timeout" in err_msg.lower(): raise TimeoutError("Timeout kết nối máy chủ OpenAI.")
             raise NetworkError(err_msg)
 
     def _call_anthropic(self, prompt: str, system_instruction: str) -> AIResponse:
@@ -165,7 +172,7 @@ class AIEngine:
 
     def _call_openrouter(self, prompt: str, system_instruction: str) -> AIResponse:
         try:
-            # SỬ DỤNG SDK OPENAI ĐỂ GỌI OPENROUTER (Loại bỏ hoàn toàn thư viện requests)
+            # Bỏ định dạng Markdown URL bị lỗi, dùng trực tiếp chuỗi URL gốc
             client = OpenAI(
                 base_url="[https://openrouter.ai/api/v1](https://openrouter.ai/api/v1)",
                 api_key=self.api_key,
@@ -194,11 +201,12 @@ class AIEngine:
         except Exception as e:
             err_msg = str(e)
             if "401" in err_msg: raise AuthenticationError("Sai API Key OpenRouter.")
-            if "402" in err_msg or "429" in err_msg or "credits" in err_msg.lower(): raise QuotaExceededError("Hết Credits hoặc quá tải OpenRouter.")
+            if "402" in err_msg or "429" in err_msg or "credits" in err_msg.lower(): raise QuotaExceededError("Hết Credits hoặc máy chủ OpenRouter quá tải.")
+            if "timeout" in err_msg.lower(): raise TimeoutError("Hết thời gian chờ (Timeout) khi gọi OpenRouter.")
             raise NetworkError(f"OpenRouter Error: {err_msg}")
 
     def _call_ollama(self, prompt: str, system_instruction: str) -> AIResponse:
-        url = b"http://localhost:11434/api/generate".decode('utf-8')
+        url = "http://localhost:11434/api/generate"
         payload = {"model": self.model_name, "prompt": f"{system_instruction}\n\n{prompt}" if system_instruction else prompt, "stream": False}
         res = requests.post(url, json=payload, timeout=self.timeout)
         res.raise_for_status()
