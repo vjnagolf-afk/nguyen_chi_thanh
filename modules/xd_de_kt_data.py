@@ -11,23 +11,23 @@ from exports.word_export_engine import WordExportEngine
 
 def build_system_prompt(config: dict, mode: str, text_context: str) -> str:
     prompt = f"""
-[CHỈ THỊ TỐI CAO]
-Bạn là Cỗ máy Sinh Đề Thi tự động chuẩn Bộ GD&ĐT Việt Nam. BẠN PHẢI TUÂN THỦ 100% CÁC LỆNH SAU:
+[CHỈ THỊ TỐI CAO DÀNH CHO AI]
+Bạn là Chuyên gia ra đề thi chuẩn Bộ GD&ĐT Việt Nam. BẠN PHẢI SINH ĐẦY ĐỦ NỘI DUNG TỪ ĐẦU ĐẾN CUỐI, TUYỆT ĐỐI KHÔNG ĐƯỢC DỪNG LẠI GIỮA CHỪNG.
 
 1. THÔNG TIN CHUNG:
 - Môn học: {config.get('mon_hoc', 'Không xác định')} | Lớp {config.get('lop', 'Không xác định')} | Thời lượng: {config.get('thoi_gian', '45 phút')}.
 
 2. KỶ LUẬT ĐỊNH DẠNG (BẮT BUỘC):
-- TOÁN HỌC VÀ VẬT LÝ: Ưu tiên dùng Unicode thường (VD: s = v × t, 60 km/h, CO2). NGHIÊM CẤM dùng dấu $ cho các đơn vị đo lường đơn giản. CHỈ SỬ DỤNG LaTeX ($...$) cho công thức quá phức tạp (phân số, căn).
-- BẢNG BIỂU: Phải điền đầy đủ dữ liệu, TUYỆT ĐỐI KHÔNG sinh ra bảng trống.
-- KHÔNG in ra lời giải thích thừa thãi như "Đây là đề thi...". CHỈ in nội dung.
+- CHỐNG LỖI BẢNG (QUAN TRỌNG NHẤT): Bảng Markdown CHỈ ĐƯỢC PHÉP có DUY NHẤT 1 dòng kẻ ngang để phân cách tiêu đề (VD: `|---|---|`). NGHIÊM CẤM VIỆC TẠO RA CÁC DÒNG CHỈ CÓ DẤU GẠCH NGANG LIÊN TỤC. Bạn phải điền nội dung chữ thực tế vào bảng.
+- TOÁN HỌC/VẬT LÝ: Dùng `$công thức$` cho các biểu thức toán học. Không dùng dấu $ cho văn bản thường.
+- KHÔNG lặp lại nội dung. KHÔNG giải thích lảm nhảm.
 """
     
     if text_context:
         prompt += f"""
 3. TÀI LIỆU NỀN TẢNG (CHẾ ĐỘ CÓ ĐỀ CƯƠNG):
-- CHỈ ĐƯỢC PHÉP sử dụng kiến thức từ văn bản sau. NGHIÊM CẤM bịa đặt kiến thức ngoài.
-- VĂN BẢN ĐỀ CƯƠNG:\n{text_context[:10000]}...\n
+- CHỈ ĐƯỢC PHÉP sử dụng kiến thức từ các văn bản sau. NGHIÊM CẤM bịa đặt kiến thức ngoài.
+- NỘI DUNG ĐỀ CƯƠNG TỔNG HỢP:\n{text_context[:15000]}...\n
 """
     else:
         prompt += "\n3. TÀI LIỆU NỀN TẢNG: Bám sát CT GDPT 2018.\n"
@@ -57,12 +57,21 @@ TUYỆT ĐỐI KHÔNG SINH LẠI ĐỀ HAY ĐÁP ÁN.
 
     if mode in ["cv7991", "tuy_chon_co_ma_tran"]:
         prompt += """
-5. TRÌNH TỰ TRẢ VỀ:
+5. TRÌNH TỰ TRẢ VỀ (BẮT BUỘC PHẢI CÓ ĐỦ 5 PHẦN, ĐÁNH DẤU BẰNG HEADING MARKDOWN #):
 # I. MA TRẬN ĐỀ KIỂM TRA
+(Chèn Bảng Ma Trận vào đây)
+
 # II. BẢN ĐẶC TẢ
+(Chèn Bảng Đặc Tả vào đây)
+
 # III. ĐỀ KIỂM TRA
+(Chèn Đề thi gồm Trắc nghiệm và Tự luận vào đây)
+
 # IV. ĐÁP ÁN
+(Chèn Đáp án Trắc nghiệm vào đây)
+
 # V. HƯỚNG DẪN CHẤM
+(Chèn Hướng dẫn chấm Tự luận vào đây)
 """
     elif mode == "tuy_chon_khong_ma_tran":
         prompt += """
@@ -77,15 +86,19 @@ def reset_output():
     if "latest_exam_md" in st.session_state:
         del st.session_state["latest_exam_md"]
 
-def process_request(config: dict, mode: str, uploaded_file):
+def process_request(config: dict, mode: str, uploaded_files: list):
     text_context = ""
-    if uploaded_file is not None:
-        with st.spinner("Đang đọc và phân tích tài liệu đính kèm..."):
-            text_context = extract_text_from_file(uploaded_file)
-            if "[LỖI" in text_context:
-                st.error(text_context)
-                return
-            st.success(f"✅ Đã đọc thành công tài liệu: {uploaded_file.name}")
+    
+    # HỖ TRỢ XỬ LÝ NHIỀU FILE CÙNG LÚC
+    if uploaded_files:
+        with st.spinner(f"Đang đọc và phân tích {len(uploaded_files)} tài liệu đính kèm..."):
+            for file in uploaded_files:
+                extracted = extract_text_from_file(file)
+                if "[LỖI" in extracted:
+                    st.error(f"Lỗi đọc file {file.name}: {extracted}")
+                    return
+                text_context += f"\n\n--- BẮT ĐẦU TÀI LIỆU: {file.name} ---\n{extracted}\n--- KẾT THÚC TÀI LIỆU ---\n"
+            st.success(f"✅ Đã tổng hợp thành công {len(uploaded_files)} tài liệu!")
     
     system_prompt = build_system_prompt(config, mode, text_context)
     engine = st.session_state.get("ai_engine")
@@ -94,14 +107,14 @@ def process_request(config: dict, mode: str, uploaded_file):
         st.error("⚠️ Lỗi Xác Thực AI: Vui lòng cấu hình API Key ở Sidebar.")
         return
 
-    with st.spinner(f"Hệ thống AI ({engine.provider_type}) đang xây dựng đề kiểm tra. Thời gian dự kiến: 20 - 45 giây..."):
+    with st.spinner(f"Hệ thống AI ({engine.provider_type}) đang xây dựng 100% đề kiểm tra. Vui lòng đợi từ 30 - 60 giây..."):
         try:
             response = engine.generate_text(
                 prompt=system_prompt, 
-                system_instruction="Tuân thủ nghiêm ngặt định dạng Markdown. Trả lời dứt khoát, không giải thích."
+                system_instruction="Chỉ sinh nội dung. Không được tạo bảng rỗng, không được sinh ra dòng kẻ nét đứt liên tục. Đảm bảo sinh đề thi hoàn chỉnh."
             )
             st.session_state["latest_exam_md"] = response.text
-            st.success(f"✅ Nhiệm vụ hoàn tất! (Thời gian xử lý: {response.latency:.2f}s | {response.total_tokens} tokens)")
+            st.success(f"✅ Nhiệm vụ hoàn tất! (Thời gian xử lý: {response.latency:.2f}s | Đã dùng: {response.total_tokens} tokens)")
         except Exception as e:
             st.error(f"❌ Tiến trình bị gián đoạn: {str(e)}")
             return
