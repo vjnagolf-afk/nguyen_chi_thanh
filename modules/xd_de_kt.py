@@ -1,41 +1,34 @@
+"""
+============================================================
+GIAO DIỆN XÂY DỰNG ĐỀ KIỂM TRA (UI LAYER)
+============================================================
+"""
 import streamlit as st
 from modules import xd_de_kt_data
 
 def render_exam_config(tab_key: str, mode: str):
-    """
-    Hàm vẽ giao diện cấu hình chung để tái sử dụng cho các Tab
-    mode: 'cv7991' (Tab 1), 'tuy_chon_co_ma_tran' (Tab 2), 'tuy_chon_khong_ma_tran' (Tab 3), 'chi_ma_tran' (Tab 4)
-    """
-    # 1. Cấu hình cơ bản
+    """Hàm vẽ giao diện cấu hình chung để tái sử dụng cho các Tab"""
+    
     st.markdown("### 1. Thông Tin Cơ Bản")
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
-        mon_hoc = st.selectbox(
-            "Môn học", 
-            ["Khoa học Tự nhiên", "Toán", "Ngữ Văn", "Tiếng Anh", "Vật lí", "Hóa học", "Sinh học", "Lịch sử và Địa lí", "Tin học", "Giáo dục công dân", "Công nghệ"], 
-            key=f"{tab_key}_mon"
-        )
+        mon_hoc = st.selectbox("Môn học", ["Khoa học Tự nhiên", "Toán", "Ngữ Văn", "Tiếng Anh", "Vật lí", "Hóa học", "Sinh học", "Lịch sử và Địa lí", "Tin học", "Giáo dục công dân", "Công nghệ"], key=f"{tab_key}_mon")
     with col2:
         lop = st.selectbox("Khối Lớp", ["6", "7", "8", "9", "10", "11", "12"], index=1, key=f"{tab_key}_lop")
     with col3:
         thoi_gian = st.selectbox("Thời gian làm bài", ["45 phút", "60 phút", "90 phút", "120 phút"], key=f"{tab_key}_time")
     with col4:
-        loai_de = st.selectbox(
-            "Loại đề", 
-            ["Kiểm tra đánh giá giữa kì I", "Kiểm tra đánh giá cuối kì I", "Kiểm tra đánh giá giữa kì II", "Kiểm tra đánh giá cuối kì II", "Kiểm tra khác"], 
-            key=f"{tab_key}_loai"
-        )
+        loai_de = st.selectbox("Loại đề", ["Kiểm tra đánh giá giữa kì I", "Kiểm tra đánh giá cuối kì I", "Kiểm tra đánh giá giữa kì II", "Kiểm tra đánh giá cuối kì II", "Kiểm tra khác"], key=f"{tab_key}_loai")
 
     chu_de = st.text_input("Nhập tên Chủ đề / Nội dung bài kiểm tra:", placeholder="VD: Quang hợp ở thực vật, Lực và Chuyển động...", key=f"{tab_key}_chude")
 
-    # Nếu là Tab 4 (Chỉ sinh ma trận từ đề tải lên), ta bỏ qua phần cấu hình câu hỏi
     if mode == "chi_ma_tran":
         st.markdown("### 2. Tải Lên Đề Kiểm Tra Có Sẵn")
         st.info("Hệ thống sẽ đọc đề kiểm tra này và tự động xây dựng Ma trận & Bản đặc tả tương ứng.")
         file_upload = st.file_uploader("Tải file Đề kiểm tra (Word, PDF, TXT):", key=f"{tab_key}_file")
         
-        if st.button("🚀 Phân Tích & Sinh Ma Trận", type="primary", key=f"{tab_key}_btn"):
+        if st.button("🚀 PHÂN TÍCH & SINH MA TRẬN", type="primary", key=f"{tab_key}_btn"):
             if not file_upload:
                 st.error("Vui lòng tải đề kiểm tra lên trước!")
             else:
@@ -43,7 +36,6 @@ def render_exam_config(tab_key: str, mode: str):
                 xd_de_kt_data.process_request(config, mode, file_upload)
         return
 
-    # 2. Cấu hình Trắc nghiệm (Tab 1, 2, 3)
     st.markdown("### 2. Cấu Hình Phần Trắc Nghiệm (TN)")
     t_col1, t_col2, t_col3, t_col4 = st.columns(4)
     
@@ -63,7 +55,6 @@ def render_exam_config(tab_key: str, mode: str):
     total_tn = (n_nlc * p_nlc) + (n_ds * p_ds) + (n_dk * p_dk) + (n_ngan * p_ngan)
     st.success(f"**Tổng điểm Trắc nghiệm hiện tại:** {total_tn} điểm")
 
-    # 3. Cấu hình Tự luận
     st.markdown("### 3. Cấu Hình Phần Tự Luận (TL)")
     total_tl_expected = 10.0 - total_tn
     st.info(f"Hệ thống tự tính: Tổng điểm Tự luận cần đạt là **{total_tl_expected} điểm** (Để tổng đề = 10)")
@@ -74,7 +65,6 @@ def render_exam_config(tab_key: str, mode: str):
     tl_cols = st.columns(n_tl)
     for i in range(n_tl):
         with tl_cols[i]:
-            # Chia đều điểm mặc định cho các câu
             default_p = total_tl_expected / n_tl
             p = st.number_input(f"Điểm Câu {i+1}", min_value=0.0, value=float(default_p), step=0.25, key=f"{tab_key}_tl_p_{i}")
             tl_points.append(p)
@@ -83,7 +73,6 @@ def render_exam_config(tab_key: str, mode: str):
     if sum_tl != total_tl_expected:
         st.error(f"❌ Tổng điểm các câu tự luận đang là {sum_tl}. Cần điều chỉnh để bằng {total_tl_expected}!")
 
-    # 4. Mức độ nhận thức
     st.markdown("### 4. Tỷ Lệ Mức Độ Nhận Thức (%)")
     m_col1, m_col2, m_col3, m_col4 = st.columns(4)
     with m_col1: nb = st.number_input("Nhận biết (%)", min_value=0, value=40, step=5, key=f"{tab_key}_nb")
@@ -95,19 +84,16 @@ def render_exam_config(tab_key: str, mode: str):
     if sum_muc_do != 100:
         st.error(f"❌ Tổng tỷ lệ đang là {sum_muc_do}%. Vui lòng điều chỉnh lại cho đúng 100%.")
 
-    # 5. Tài liệu đính kèm
     st.markdown("### 5. Đính Kèm Đề Cương / Sách Giáo Khoa (Tùy chọn)")
     file_upload = st.file_uploader("Tải file tài liệu để AI bám sát (Word, PDF, Text):", key=f"{tab_key}_file_ref")
 
-    # Nút Xử lý
     st.divider()
-    if st.button("🚀 Tiến Hành Xây Dựng Đề", type="primary", use_container_width=True, key=f"{tab_key}_btn_submit"):
+    if st.button("🚀 TIẾN HÀNH XÂY DỰNG ĐỀ", type="primary", use_container_width=True, key=f"{tab_key}_btn_submit"):
         if sum_tl != total_tl_expected:
             st.warning("Vui lòng sửa lại điểm các câu Tự luận cho khớp tổng điểm!")
         elif sum_muc_do != 100:
             st.warning("Vui lòng sửa lại Tỷ lệ mức độ cho đủ 100%!")
         else:
-            # Gom toàn bộ dữ liệu cấu hình
             config = {
                 "mon_hoc": mon_hoc, "lop": lop, "thoi_gian": thoi_gian, "loai_de": loai_de, "chu_de": chu_de,
                 "tn": {"n_nlc": n_nlc, "p_nlc": p_nlc, "n_ds": n_ds, "p_ds": p_ds, "n_dk": n_dk, "p_dk": p_dk, "n_ngan": n_ngan, "p_ngan": p_ngan, "total": total_tn},
@@ -121,23 +107,13 @@ def render_ui():
     st.title("📝 HỆ THỐNG XÂY DỰNG ĐỀ KIỂM TRA CHUYÊN SÂU")
     
     tab1, tab2, tab3, tab4 = st.tabs([
-        "📖 Đề theo CV 7991 (Có Ma trận)", 
+        "📖 Đề CV 7991 (Có Ma trận)", 
         "🛠️ Đề Tự do (Có Ma trận)", 
         "⚡ Đề Tự do (Chỉ ra đề)", 
         "🔍 Đọc Đề -> Sinh Ma trận"
     ])
     
-    with tab1:
-        st.info("Chế độ này sẽ tuân thủ nghiêm ngặt cấu trúc Công văn 7991 của Bộ GD&ĐT.")
-        render_exam_config("tab1", "cv7991")
-        
-    with tab2:
-        st.info("Giáo viên tùy biến số câu, AI sẽ tự động sinh thêm Ma trận và Bản đặc tả khớp với đề.")
-        render_exam_config("tab2", "tuy_chon_co_ma_tran")
-        
-    with tab3:
-        st.info("Chế độ sinh đề nhanh: Bỏ qua Ma trận và Bản đặc tả, đi thẳng vào sinh Đề và Đáp án.")
-        render_exam_config("tab3", "tuy_chon_khong_ma_tran")
-        
-    with tab4:
-        render_exam_config("tab4", "chi_ma_tran")
+    with tab1: render_exam_config("tab1", "cv7991")
+    with tab2: render_exam_config("tab2", "tuy_chon_co_ma_tran")
+    with tab3: render_exam_config("tab3", "tuy_chon_khong_ma_tran")
+    with tab4: render_exam_config("tab4", "chi_ma_tran")
