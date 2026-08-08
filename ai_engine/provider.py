@@ -28,7 +28,7 @@ from google.genai.errors import APIError
 # ==========================================
 DEFAULT_TIMEOUT = 120
 DEFAULT_TEMP = 0.2
-DEFAULT_MAX_TOKENS = 8192  # Cố định giới hạn token đầu ra để tránh lỗi tín dụng (Credits)
+DEFAULT_MAX_TOKENS = 6000  # ĐÃ HẠ XUỐNG 6000 ĐỂ PHÙ HỢP VỚI TÍN DỤNG OPENROUTER HIỆN TẠI
 DEFAULT_TOP_P = 0.95
 
 # ==========================================
@@ -49,7 +49,6 @@ class TimeoutError(AIEngineError): pass
 # ==========================================
 @dataclass
 class AIResponse:
-    """Cấu trúc dữ liệu chuẩn trả về từ mọi nhà cung cấp AI."""
     text: str
     provider: str
     model: str
@@ -59,24 +58,10 @@ class AIResponse:
     total_tokens: int = 0
     finish_reason: str = "stop"
 
-# ==========================================
-# CACHE TOÀN CỤC (GLOBAL CACHE)
-# ==========================================
 prompt_cache = TTLCache(maxsize=200, ttl=3600)
 
 class AIEngine:
-    """
-    Trình điều khiển Trung tâm kết nối đa mô hình AI.
-    Hỗ trợ: Gemini (SDK mới), OpenAI, Claude, OpenRouter, Ollama.
-    """
-
-    def __init__(
-        self,
-        provider_type: str,
-        api_key: str,
-        model_name: str,
-        timeout: int = DEFAULT_TIMEOUT,
-    ):
+    def __init__(self, provider_type: str, api_key: str, model_name: str, timeout: int = DEFAULT_TIMEOUT):
         self.provider_type = provider_type.split()[0]
         self.api_key = api_key.strip()
         self.model_name = model_name.strip()
@@ -90,18 +75,16 @@ class AIEngine:
         self._validate_provider()
 
     def is_ready(self) -> bool:
-        """Kiểm tra xem Engine đã sẵn sàng nhận lệnh chưa."""
         return self._is_ready
 
     def _validate_provider(self):
-        """Kiểm tra tính hợp lệ giữa Provider và Model Name."""
         model_lower = self.model_name.lower()
         if self.provider_type == "Gemini" and "gemini" not in model_lower:
-            raise ModelNotFoundError(f"Model '{self.model_name}' không hợp lệ cho Gemini SDK. Cần chứa từ khóa 'gemini'.")
+            raise ModelNotFoundError(f"Model '{self.model_name}' không hợp lệ cho Gemini SDK.")
         if self.provider_type == "OpenAI" and "gpt" not in model_lower and "o1" not in model_lower:
-            raise ModelNotFoundError(f"Model '{self.model_name}' không hợp lệ cho OpenAI. Cần chứa 'gpt' hoặc 'o1'.")
+            raise ModelNotFoundError(f"Model '{self.model_name}' không hợp lệ cho OpenAI.")
         if self.provider_type == "Anthropic" and "claude" not in model_lower:
-            raise ModelNotFoundError(f"Model '{self.model_name}' không hợp lệ cho Claude. Cần chứa 'claude'.")
+            raise ModelNotFoundError(f"Model '{self.model_name}' không hợp lệ cho Claude.")
 
     def _build_messages(self, system_instruction: str, prompt: str) -> List[Dict[str, str]]:
         messages = []
@@ -134,7 +117,6 @@ class AIEngine:
                 continue
             try:
                 temp_engine = AIEngine(provider_type=provider, api_key=key, model_name=model, timeout=self.timeout)
-                logger.warning(f"Đang thử Fallback với {provider} ({model})...")
                 return temp_engine.generate_text(prompt, system_instruction)
             except Exception as e:
                 logger.error(f"Fallback {provider} thất bại: {e}")
@@ -155,18 +137,14 @@ class AIEngine:
         retry=retry_if_exception_type((NetworkError, TimeoutError))
     )
     def generate_text(self, prompt: str, system_instruction: str = "", stream: bool = False) -> Union[AIResponse, Generator]:
-        
         if not self.is_ready():
-            raise AuthenticationError("Hệ thống AI chưa sẵn sàng. Vui lòng kiểm tra API Key.")
+            raise AuthenticationError("Hệ thống AI chưa sẵn sàng.")
 
         cache_key = hash(f"{self.provider_type}_{self.model_name}_{system_instruction}_{prompt}")
         if not stream and cache_key in prompt_cache:
-            logger.info("⚡ Trả về kết quả từ Cache.")
             return prompt_cache[cache_key]
 
-        logger.info(f"🚀 Calling {self.provider_type} | Model: {self.model_name} | Prompt length: {len(prompt)}")
         start_time = time.time()
-
         try:
             if self.provider_type == "Gemini":
                 response = self._call_gemini_sdk(prompt, system_instruction)
@@ -183,25 +161,14 @@ class AIEngine:
 
             elapsed = time.time() - start_time
             response.latency = elapsed
-            
-            logger.info(f"✅ Success | Latency: {elapsed:.2f}s | Tokens (P/C/T): {response.prompt_tokens}/{response.completion_tokens}/{response.total_tokens}")
-            
             if not stream:
                 prompt_cache[cache_key] = response
-                
             return response
-
         except requests.exceptions.Timeout:
-            logger.error("⏳ Lỗi Timeout từ máy chủ.")
             raise TimeoutError("Kết nối quá thời gian chờ.")
         except Exception as e:
-            logger.error(f"❌ Lỗi {self.provider_type}: {str(e)}")
-            raise AIEngineError(f"Lỗi hệ thống AI: {str(e)}")
+            raise AIEngineError(f"{str(e)}")
 
-    # ==========================================
-    # TRÌNH ĐIỀU KHIỂN CỤ THỂ
-    # ==========================================
-    
     def _call_gemini_sdk(self, prompt: str, system_instruction: str) -> AIResponse:
         try:
             client = genai.Client(api_key=self.api_key)
@@ -211,35 +178,17 @@ class AIEngine:
                 max_output_tokens=DEFAULT_MAX_TOKENS,
                 system_instruction=system_instruction if system_instruction else None
             )
-            
-            res = client.models.generate_content(
-                model=self.model_name,
-                contents=prompt,
-                config=config,
-            )
-            
+            res = client.models.generate_content(model=self.model_name, contents=prompt, config=config)
             usage = res.usage_metadata
-            p_tokens = usage.prompt_token_count if usage else 0
-            c_tokens = usage.candidates_token_count if usage else 0
-            
             return AIResponse(
-                text=res.text,
-                provider="Gemini",
-                model=self.model_name,
-                latency=0.0,
-                prompt_tokens=p_tokens,
-                completion_tokens=c_tokens,
-                total_tokens=p_tokens + c_tokens
+                text=res.text, provider="Gemini", model=self.model_name, latency=0.0,
+                prompt_tokens=usage.prompt_token_count if usage else 0,
+                completion_tokens=usage.candidates_token_count if usage else 0,
+                total_tokens=(usage.prompt_token_count + usage.candidates_token_count) if usage else 0
             )
         except APIError as e:
-            err_msg = str(e).lower()
-            if "access_token_type_unsupported" in err_msg or "oauth" in err_msg:
-                raise AuthenticationError(
-                    "Khóa bảo mật hiện tại là mã OAuth tạm thời, không phải API Key tĩnh. "
-                    "Vui lòng chuyển sang dùng nguồn 'OpenRouter' (Đã tích hợp sẵn Gemini 2.5 Flash) ở menu bên trái."
-                )
-            if "api_key" in err_msg or "401" in err_msg or "403" in err_msg:
-                raise AuthenticationError(f"API Key Gemini không hợp lệ. Chi tiết: {str(e)}")
+            if "oauth" in str(e).lower():
+                raise AuthenticationError("Khóa bảo mật là mã OAuth tạm thời. Vui lòng chuyển sang 'OpenRouter'.")
             raise NetworkError(f"Lỗi API Gemini: {str(e)}")
         except Exception as e:
             raise NetworkError(f"Lỗi kết nối SDK Gemini: {str(e)}")
@@ -247,24 +196,13 @@ class AIEngine:
     def _call_openai(self, prompt: str, system_instruction: str) -> AIResponse:
         try:
             client = OpenAI(api_key=self.api_key, timeout=self.timeout)
-            messages = self._build_messages(system_instruction, prompt)
-            
             res = client.chat.completions.create(
-                model=self.model_name,
-                messages=messages,
-                temperature=DEFAULT_TEMP,
-                max_tokens=DEFAULT_MAX_TOKENS,
-                top_p=DEFAULT_TOP_P
+                model=self.model_name, messages=self._build_messages(system_instruction, prompt),
+                temperature=DEFAULT_TEMP, max_tokens=DEFAULT_MAX_TOKENS, top_p=DEFAULT_TOP_P
             )
-            
             return AIResponse(
-                text=res.choices[0].message.content,
-                provider="OpenAI",
-                model=self.model_name,
-                latency=0.0,
-                prompt_tokens=res.usage.prompt_tokens,
-                completion_tokens=res.usage.completion_tokens,
-                total_tokens=res.usage.total_tokens
+                text=res.choices[0].message.content, provider="OpenAI", model=self.model_name, latency=0.0,
+                prompt_tokens=res.usage.prompt_tokens, completion_tokens=res.usage.completion_tokens, total_tokens=res.usage.total_tokens
             )
         except Exception as e:
             if "401" in str(e): raise AuthenticationError("Sai API Key OpenAI.")
@@ -274,23 +212,14 @@ class AIEngine:
     def _call_anthropic(self, prompt: str, system_instruction: str) -> AIResponse:
         try:
             client = anthropic.Anthropic(api_key=self.api_key, timeout=self.timeout)
-            
             res = client.messages.create(
-                model=self.model_name,
-                max_tokens=DEFAULT_MAX_TOKENS,
-                temperature=DEFAULT_TEMP,
+                model=self.model_name, max_tokens=DEFAULT_MAX_TOKENS, temperature=DEFAULT_TEMP,
                 system=system_instruction if system_instruction else anthropic.NOT_GIVEN,
                 messages=[{"role": "user", "content": prompt}]
             )
-            
             return AIResponse(
-                text=res.content[0].text,
-                provider="Anthropic",
-                model=self.model_name,
-                latency=0.0,
-                prompt_tokens=res.usage.input_tokens,
-                completion_tokens=res.usage.output_tokens,
-                total_tokens=res.usage.input_tokens + res.usage.output_tokens
+                text=res.content[0].text, provider="Anthropic", model=self.model_name, latency=0.0,
+                prompt_tokens=res.usage.input_tokens, completion_tokens=res.usage.output_tokens, total_tokens=res.usage.input_tokens + res.usage.output_tokens
             )
         except Exception as e:
             if "authentication" in str(e).lower(): raise AuthenticationError("Sai API Key Claude.")
@@ -298,63 +227,35 @@ class AIEngine:
 
     def _call_openrouter(self, prompt: str, system_instruction: str) -> AIResponse:
         url = "https://openrouter.ai/api/v1/chat/completions"
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-            "HTTP-Referer": "https://github.com/giangvien/edu-ai",
-            "X-Title": "AI Exam Generator"
-        }
-        
+        headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
         payload = {
             "model": self.model_name,
             "messages": self._build_messages(system_instruction, prompt),
             "temperature": DEFAULT_TEMP,
-            "max_tokens": DEFAULT_MAX_TOKENS  # VÁ LỖI TẠI ĐÂY: Khóa cứng giới hạn token trả về
+            "max_tokens": DEFAULT_MAX_TOKENS
         }
-        
         res = self.session.post(url, headers=headers, json=payload, timeout=self.timeout)
-        
         if res.status_code in [429, 500, 502, 503, 504]:
             raise NetworkError(f"HTTP {res.status_code}: Máy chủ OpenRouter quá tải.")
-            
         data = res.json()
-        
         if "error" in data:
             err_msg = data["error"].get("message", "Lỗi không xác định")
             if "auth" in err_msg.lower(): raise AuthenticationError(err_msg)
             if "credits" in err_msg.lower(): raise QuotaExceededError(err_msg)
             raise AIEngineError(f"OpenRouter Error: {err_msg}")
-            
-        usage = data.get("usage", {})
-        
         return AIResponse(
-            text=data["choices"][0]["message"]["content"],
-            provider="OpenRouter",
-            model=self.model_name,
-            latency=0.0,
-            prompt_tokens=usage.get("prompt_tokens", 0),
-            completion_tokens=usage.get("completion_tokens", 0),
-            total_tokens=usage.get("total_tokens", 0)
+            text=data["choices"][0]["message"]["content"], provider="OpenRouter", model=self.model_name, latency=0.0,
+            prompt_tokens=data.get("usage", {}).get("prompt_tokens", 0),
+            completion_tokens=data.get("usage", {}).get("completion_tokens", 0),
+            total_tokens=data.get("usage", {}).get("total_tokens", 0)
         )
 
     def _call_ollama(self, prompt: str, system_instruction: str) -> AIResponse:
         url = "http://localhost:11434/api/generate"
-        payload = {
-            "model": self.model_name,
-            "prompt": f"{system_instruction}\n\n{prompt}" if system_instruction else prompt,
-            "stream": False
-        }
-        
-        res = self.session.post(url, json=payload, timeout=self.timeout)
+        res = self.session.post(url, json={"model": self.model_name, "prompt": f"{system_instruction}\n\n{prompt}" if system_instruction else prompt, "stream": False}, timeout=self.timeout)
         res.raise_for_status()
-        
         data = res.json()
         return AIResponse(
-            text=data["response"],
-            provider="Ollama",
-            model=self.model_name,
-            latency=0.0,
-            prompt_tokens=data.get("prompt_eval_count", 0),
-            completion_tokens=data.get("eval_count", 0),
-            total_tokens=data.get("prompt_eval_count", 0) + data.get("eval_count", 0)
+            text=data["response"], provider="Ollama", model=self.model_name, latency=0.0,
+            prompt_tokens=data.get("prompt_eval_count", 0), completion_tokens=data.get("eval_count", 0), total_tokens=data.get("prompt_eval_count", 0) + data.get("eval_count", 0)
         )
