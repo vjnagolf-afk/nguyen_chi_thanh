@@ -23,14 +23,15 @@ def render_exam_config(tab_key: str, mode: str):
 
     if mode == "chi_ma_tran":
         st.markdown("### 2. Tải Lên Đề Kiểm Tra Có Sẵn (BẮT BUỘC)")
-        file_upload = st.file_uploader("Tải file Đề kiểm tra (Word, PDF, TXT):", key=f"{tab_key}_file")
+        # BẬT TÍNH NĂNG TẢI NHIỀU FILE
+        uploaded_files = st.file_uploader("Tải lên 1 hoặc nhiều file Đề kiểm tra (Word, PDF, TXT):", accept_multiple_files=True, key=f"{tab_key}_file")
         
         if st.button("🚀 PHÂN TÍCH & SINH MA TRẬN", type="primary", key=f"{tab_key}_btn"):
-            if not file_upload:
+            if not uploaded_files:
                 st.error("❌ BẮT BUỘC PHẢI TẢI LÊN ĐỀ KIỂM TRA trước khi thực hiện!")
             else:
                 config = {"mon_hoc": mon_hoc, "lop": lop, "thoi_gian": thoi_gian, "loai_de": loai_de, "chu_de": chu_de}
-                xd_de_kt_data.process_request(config, mode, file_upload)
+                xd_de_kt_data.process_request(config, mode, uploaded_files)
         return
 
     st.markdown("### 2. Cấu Hình Phần Trắc Nghiệm (TN)")
@@ -81,18 +82,17 @@ def render_exam_config(tab_key: str, mode: str):
     if sum_muc_do != 100:
         st.error(f"❌ Tổng tỷ lệ đang là {sum_muc_do}%. Vui lòng điều chỉnh lại cho đúng 100%.")
 
-    # BẮT BUỘC TẢI ĐỀ CƯƠNG CHO TAB 1 & 2
+    # BẬT TÍNH NĂNG TẢI NHIỀU FILE
     if mode in ["cv7991", "tuy_chon_co_ma_tran"]:
         st.markdown("### 5. Đính Kèm Đề Cương / Nội Dung (BẮT BUỘC)")
-        file_upload = st.file_uploader("Tải file tài liệu để AI bám sát (Word, PDF, Text):", key=f"{tab_key}_file_ref")
+        uploaded_files = st.file_uploader("Tải lên 1 hoặc NHIỀU file tài liệu (Kéo thả vào đây):", accept_multiple_files=True, key=f"{tab_key}_file_ref")
     else:
         st.markdown("### 5. Đính Kèm Đề Cương / Sách Giáo Khoa (Tùy chọn)")
-        file_upload = st.file_uploader("Tải file tài liệu (Tùy chọn):", key=f"{tab_key}_file_ref")
+        uploaded_files = st.file_uploader("Tải lên nhiều file tài liệu (Tùy chọn):", accept_multiple_files=True, key=f"{tab_key}_file_ref")
 
     st.divider()
     if st.button("🚀 TIẾN HÀNH XÂY DỰNG ĐỀ", type="primary", use_container_width=True, key=f"{tab_key}_btn_submit"):
-        # CHỐT CHẶN BẮT BUỘC TẢI ĐỀ CƯƠNG
-        if mode in ["cv7991", "tuy_chon_co_ma_tran"] and not file_upload:
+        if mode in ["cv7991", "tuy_chon_co_ma_tran"] and not uploaded_files:
             st.error("❌ CHỨC NĂNG NÀY BẮT BUỘC PHẢI TẢI LÊN ĐỀ CƯƠNG HOẶC TÀI LIỆU ÔN TẬP!")
         elif sum_tl != total_tl_expected:
             st.warning("Vui lòng sửa lại điểm các câu Tự luận cho khớp tổng điểm!")
@@ -105,7 +105,7 @@ def render_exam_config(tab_key: str, mode: str):
                 "tl": {"so_cau": n_tl, "diem_chi_tiet": tl_points, "total": sum_tl},
                 "muc_do": {"nb": nb, "th": th, "vd": vd, "vdc": vdc}
             }
-            xd_de_kt_data.process_request(config, mode, file_upload)
+            xd_de_kt_data.process_request(config, mode, uploaded_files)
 
 def render_ui():
     st.title("📝 HỆ THỐNG XÂY DỰNG ĐỀ KIỂM TRA CHUYÊN SÂU")
